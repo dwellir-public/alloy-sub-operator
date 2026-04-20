@@ -1,0 +1,94 @@
+name: alloy-sub
+type: charm
+title: Grafana Alloy Subordinate
+summary: Subordinate charm for workload-local metrics and logs using Grafana Alloy.
+description: |
+  alloy-sub is a machine subordinate that attaches to a principal over juju-info,
+  consumes workload observability declarations over machine-observability, scrapes
+  workload-local metrics, captures journald and file logs, and forwards telemetry
+  to Loki and Prometheus-compatible remote write backends.
+
+platforms:
+  ubuntu@24.04:amd64:
+
+subordinate: true
+
+config:
+  options:
+    # An example config option to customise the log level of the workload
+    log-level:
+      description: |
+        Configures the log level of alloy.
+      default: "info"
+      type: string
+    systemd-service:
+      description: |
+        Systemd service name of the principal charm to monitor and forward logs for. 
+        If not set, the service not forward any _SYSTEMD_UNIT systemd logs.
+      default: ""
+      type: string
+    custom-args:
+      description: |
+        Custom arguments for the Alloy service.
+        Hard coded args, that must not be set here:
+        --server.http.listen-addr=0.0.0.0:6987
+        --config.file=/etc/alloy/config.alloy
+      default: ""
+      type: string
+    loki-url:
+      description: |
+        The URL of the Loki service to send logs to.
+      type: string
+      default: ""
+    path_exclude:
+      description: |
+        Semi-colon separated file log exclude patterns appended to workload excludes.
+      type: string
+      default: ""
+    global_scrape_interval:
+      description: |
+        Default scrape interval used when metrics jobs omit one.
+      type: string
+      default: "1m"
+    global_scrape_timeout:
+      description: |
+        Default scrape timeout used when metrics jobs omit one.
+      type: string
+      default: "10s"
+    tls_insecure_skip_verify:
+      description: |
+        Skip TLS verification for rendered scrape jobs when true.
+      type: boolean
+      default: false
+    queue_size:
+      description: |
+        Queue size for outbound telemetry buffering.
+      type: int
+      default: 1000
+    max_elapsed_time_min:
+      description: |
+        Maximum retry window in minutes for outbound telemetry.
+      type: int
+      default: 5
+
+requires:
+  juju-info:
+    interface: juju-info
+    scope: container
+  machine-observability:
+    interface: machine_observability
+    scope: container
+    optional: true
+  send-loki-logs:
+    interface: loki_push_api
+    optional: true
+  send-remote-write:
+    interface: prometheus_remote_write
+    optional: true
+
+parts:
+  charm:
+    plugin: uv
+    source: .
+    build-snaps:
+      - astral-uv

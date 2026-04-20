@@ -1,0 +1,37 @@
+logging {
+    level = "{{ logging_level | default('warn') }}"
+}
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "systemd_unit"
+  }
+}
+
+loki.source.journal "read"  {
+  relabel_rules = loki.relabel.journal.rules
+  labels        = {component = "loki.source.journal"}
+  matches       = "_SYSTEMD_UNIT={{ systemd_unit | default('polkadot.service') }}"
+  forward_to    = [loki.process.add_juju_topo.receiver]
+}
+
+loki.process "add_juju_topo" {
+    stage.static_labels {
+      values = {
+        juju_model = "{{ topology.model }}",
+        juju_model_uuid = "{{ topology.model_uuid }}",
+        juju_application = "{{ topology.application }}",
+        juju_unit = "{{ topology.unit }}",
+      }
+    }
+  forward_to    = [loki.write.endpoint.receiver]
+}
+
+loki.write "endpoint" {
+  endpoint {
+    url ="{{ loki_endpoint_url }}"
+  }
+}

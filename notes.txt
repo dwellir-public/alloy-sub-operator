@@ -1,0 +1,87 @@
+# Logging interface
+
+
+provides:
+  logging:
+    interface: loki_push_api
+    optional: true
+    description: Integration to receive logs from other charms.
+
+
+# Juju topology
+ 
+ self._juju_topology = JujuTopology.from_charm(self)
+
+# LokiPushApiProvider
+
+        external_url = urlparse(self._external_url)
+        self.loki_provider = LokiPushApiProvider(
+            self,
+            address=external_url.hostname or self.hostname,
+            port=external_url.port or 443 if self._tls_ready else 80,
+            scheme=external_url.scheme,
+            path=f"{external_url.path}{self._loki_push_api_endpoint}",
+        )
+
+
+        self.framework.observe(
+            self.loki_provider.on.loki_push_api_alert_rules_changed,
+            self._loki_push_api_alert_rules_changed,
+        )
+        self.framework.observe(self.on.logging_relation_changed, self._on_logging_relation_changed)
+
+        def _on_logging_relation_changed(self, event):
+            # If there is a change in logging relation, let's update Loki endpoint
+            # We are listening to relation_change to handle the Loki scale down to 0 and scale up again
+            # when it is related with ingress. If not, endpoints will end up outdated in consumer side.
+            self.loki_provider.update_endpoint(url=self._external_url, relation=event.relation)
+
+
+
+    def _on_config_changed(self, event):
+        """
+        Update the configuration file
+
+        The configuration file can be reloaded from disk by either:
+
+        Sending an HTTP POST request to the /-/reload endpoint.
+        Sending a SIGHUP signal to the Alloy process.
+    """
+        # Backup current configuration before applying changes
+        config_path = self.config.get("config_path", "/etc/alloy/config.alloy")
+        backup_path = f"{config_path}.backup"
+        if os.path.exists(config_path):
+            shutil.copy2(config_path, backup_path)
+        
+        # Write new configuration as plain text
+        config_content = self.config.get("config_content", "")
+
+        # Test the configuration content before applying it
+        temp_config_path = "/tmp/config.alloy.tmp"
+        try:
+            with open(temp_config_path, "w") as temp_file:
+                temp_file.write(config_content)
+            
+            # Validate the configuration using "alloy fmt"
+            result = subprocess.run(["alloy", "fmt", temp_config_path], check=False)
+            if result.returncode != 0:
+                self.unit.status = MaintenanceStatus("Invalid configuration content")
+                event.defer()
+                return
+        except Exception as e:
+            self.unit.status = MaintenanceStatus(f"Failed to validate config: {e}")
+            event.defer()
+            return
+        finally:
+            if os.path.exists(temp_config_path):
+                os.remove(temp_config_path)
+        if config_content:
+            try:
+                with open(config_path, "w") as f:
+                    f.write(config_content)
+                # Log the successful update
+                logging.info(f"Configuration successfully updated to {config_path}")
+            except Exception as e:
+                self.unit.status = MaintenanceStatus(f"Failed to write config: {e}")
+                event.defer()
+                return

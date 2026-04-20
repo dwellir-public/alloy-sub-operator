@@ -1,0 +1,62 @@
+[project]
+name = "alloy-sub"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+  "ops>=3,<4",
+  "jinja2",
+  "requests",
+  "cosl",
+  "pydantic>=2,<3",
+]
+
+[dependency-groups]
+lint = ["ruff", "codespell"]
+unit = ["pytest", "coverage[toml]", "ops[testing]"]
+integration = ["pytest", "pytest-operator", "juju"]
+dev = [
+  {include-group = "lint"},
+  {include-group = "unit"},
+  {include-group = "integration"},
+  "pyright",
+]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+log_cli_level = "INFO"
+
+[tool.ruff]
+line-length = 120
+lint.select = ["E", "W", "F", "C", "N", "D", "I001"]
+lint.extend-ignore = [
+    "D105",
+    "D107",
+    "D203",
+    "D204",
+    "D213",
+    "D215",
+    "D400",
+    "D404",
+    "D406",
+    "D407",
+    "D408",
+    "D409",
+    "D413",
+]
+extend-exclude = ["__pycache__", "*.egg_info"]
+lint.per-file-ignores = {"tests/*" = ["D100","D101","D102","D103","D104"]}
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.codespell]
+skip = "build,lib,venv,icon.svg,.tox,.git,.mypy_cache,.ruff_cache,.coverage"
+
+[tool.pyright]
+include = ["src/**.py"]
