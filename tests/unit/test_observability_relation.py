@@ -4,12 +4,34 @@ from pathlib import Path
 
 import pytest
 from ops import testing
+from ops.charm import CharmBase
 from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
-from src.machine_observability import MachineObservabilityPayload, load_machine_observability_payload
+from charms.dwellir_observability.v0.machine_observability import (
+    MachineObservabilityPayload,
+    MachineObservabilityProvider,
+    build_machine_observability_payload,
+    load_machine_observability_payload,
+)
 from src.principal_context import PrincipalContext
+
+
+class _ProviderCharm(CharmBase):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.machine_observability_provider = MachineObservabilityProvider(
+            self,
+            payload_factory=self._build_payload,
+        )
+
+    def _build_payload(self):
+        return build_machine_observability_payload(
+            service_name="snap.polkadot.polkadot.service",
+            charm_name=self.meta.name,
+        )
 
 
 def test_principal_context_prefers_attached_principal_unit():
@@ -109,6 +131,30 @@ def test_load_machine_observability_payload_reads_remote_app_payload():
     assert payload.schema_version == 1
     assert payload.log_files[0].include == ["/var/log/polkadot/*.log"]
     assert payload.log_files[0].attributes == {"service": "polkadot"}
+
+
+def test_provider_publishes_payload_on_relation_created():
+    harness = testing.Harness(
+        _ProviderCharm,
+        meta="""
+name: polkadot
+provides:
+  machine-observability:
+    interface: machine_observability
+""",
+    )
+    harness.begin()
+    harness.set_leader(True)
+
+    relation_id = harness.add_relation("machine-observability", "alloy-sub")
+    harness.add_relation_unit(relation_id, "alloy-sub/0")
+
+    payload = json.loads(
+        harness.get_relation_data(relation_id, harness.charm.app.name)["payload"]
+    )
+
+    assert payload["charm_name"] == "polkadot"
+    assert payload["systemd_units"] == ["snap.polkadot.polkadot.service"]
 
 
 def test_principal_context_omits_juju_charm_when_not_known():

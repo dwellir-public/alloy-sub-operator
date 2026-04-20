@@ -1,7 +1,10 @@
 # alloy-sub
 
-`alloy-sub` is a machine subordinate that attaches to a principal via `juju-info`
-and consumes `machine-observability` declarations for logs and metrics.
+`alloy-sub` is a machine subordinate that attaches to a principal via `juju-info`.
+
+The workload is Grafana Alloy and is installed via the official Grafana deb repository.
+
+To properly integrate with the principal, it consumes `machine-observability` declarations for logs and metrics if your charm supports the `machine-observability` interface.
 
 ## Principal Contract
 

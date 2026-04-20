@@ -15,6 +15,11 @@ import ops
 
 try:
     from . import alloy
+    from charms.dwellir_observability.v0.machine_observability import (
+        MachineObservabilityConsumer,
+        MachineObservabilityPayload,
+        MetricsEndpoint,
+    )
     from .config_builder import (
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
@@ -23,14 +28,14 @@ try:
         ScrapeTarget,
     )
     from .custom_args import build_effective_custom_args
-    from .machine_observability import (
-        MachineObservabilityPayload,
-        MetricsEndpoint,
-        load_machine_observability_payload,
-    )
     from .principal_context import PrincipalContext
 except ImportError:
     import alloy
+    from charms.dwellir_observability.v0.machine_observability import (
+        MachineObservabilityConsumer,
+        MachineObservabilityPayload,
+        MetricsEndpoint,
+    )
     from config_builder import (
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
@@ -39,11 +44,6 @@ except ImportError:
         ScrapeTarget,
     )
     from custom_args import build_effective_custom_args
-    from machine_observability import (
-        MachineObservabilityPayload,
-        MetricsEndpoint,
-        load_machine_observability_payload,
-    )
     from principal_context import PrincipalContext
 
 logger = logging.getLogger(__name__)
@@ -147,6 +147,7 @@ class AlloySubCharm(ops.CharmBase):
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
         self._stored.set_default(last_good_config="", last_custom_args="")
+        self.machine_observability_consumer = MachineObservabilityConsumer(self)
 
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.start, self._on_start)
@@ -294,7 +295,7 @@ class AlloySubCharm(ops.CharmBase):
         relation = self.model.get_relation("machine-observability")
         if relation is None:
             return MachineObservabilityPayload()
-        return load_machine_observability_payload(relation)
+        return self.machine_observability_consumer.get_payload(relation)
 
     def _desired_custom_args(self) -> str:
         """Return the desired Alloy service args."""
