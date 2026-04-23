@@ -3,12 +3,11 @@
 #
 # Learn more about testing at: https://juju.is/docs/sdk/testing
 
-import unittest
-import sys
 import json
+import sys
 from pathlib import Path
-from unittest.mock import patch
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from ops import testing
 
@@ -16,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
 from charm import AlloySubCharm, relation_urls
-
 
 LOKI_URL = "http://loki:3100/loki/api/v1/push"
 REMOTE_WRITE_URL = "http://mimir:9009/api/v1/push"
@@ -72,15 +70,19 @@ def _ready_state(*, with_loki=False, with_remote_write=False):
 def test_start_becomes_active_when_required_relations_present():
     ctx = testing.Context(AlloySubCharm)
 
-    with patch("charm.alloy.start"), patch("charm.alloy.get_version", return_value="1.0.0"), patch(
-        "charm.alloy.is_active", return_value=True
-    ), patch("charm.alloy.ensure_config_dir_permissions"), patch(
-        "charm.alloy.write_config_text"
-    ), patch("charm.alloy.write_custom_args"), patch(
-        "charm.alloy.custom_args_applied", return_value=True
-    ), patch("charm.alloy.reload"), patch("charm.alloy.restart"), patch(
-        "charm.alloy.verify_config"
-    ), patch("charm.ConfigBuilder") as builder_cls:
+    with (
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
         builder_cls.return_value.build.return_value = ""
         state_out = ctx.run(ctx.on.start(), _ready_state(with_loki=True))
 
@@ -95,7 +97,8 @@ def test_start_waits_for_required_relations_when_missing():
         state_out = ctx.run(ctx.on.start(), testing.State())
 
     assert state_out.unit_status == testing.WaitingStatus(
-        "Waiting for juju-info relation, machine-observability relation, and one of send-loki-logs or send-remote-write relations"
+        "Waiting for juju-info relation, machine-observability relation, "
+        "and one of send-loki-logs or send-remote-write relations"
     )
 
 
@@ -120,9 +123,7 @@ def test_start_waits_for_machine_observability_relation():
     with patch("charm.alloy.start"), patch("charm.alloy.get_version", return_value="1.0.0"):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.WaitingStatus(
-        "Waiting for machine-observability relation"
-    )
+    assert state_out.unit_status == testing.WaitingStatus("Waiting for machine-observability relation")
 
 
 def test_start_waits_for_sink_relation():
@@ -153,9 +154,7 @@ def test_relation_urls_reads_unit_loki_endpoint_json():
         },
     )
 
-    assert relation_urls([relation], json_keys=("endpoint",)) == [
-        "http://loki:3100/loki/api/v1/push"
-    ]
+    assert relation_urls([relation], json_keys=("endpoint",)) == ["http://loki:3100/loki/api/v1/push"]
 
 
 def test_relation_urls_reads_unit_remote_write_json():
@@ -170,9 +169,7 @@ def test_relation_urls_reads_unit_remote_write_json():
         },
     )
 
-    assert relation_urls([relation], json_keys=("remote_write",)) == [
-        "http://mimir:9009/api/v1/push"
-    ]
+    assert relation_urls([relation], json_keys=("remote_write",)) == ["http://mimir:9009/api/v1/push"]
 
 
 def test_configure_restarts_alloy_when_custom_args_change():
@@ -207,13 +204,16 @@ def test_configure_restarts_alloy_when_custom_args_change():
         ),
     )
 
-    with patch("charm.ConfigBuilder") as builder_cls, patch(
-        "charm.alloy.ensure_config_dir_permissions"
-    ), patch("charm.alloy.write_config_text"), patch("charm.alloy.write_custom_args"), patch(
-        "charm.alloy.is_active", return_value=True
-    ), patch("charm.alloy.custom_args_applied", return_value=False), patch(
-        "charm.alloy.reload"
-    ) as reload_mock, patch("charm.alloy.restart") as restart_mock:
+    with (
+        patch("charm.ConfigBuilder") as builder_cls,
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.custom_args_applied", return_value=False),
+        patch("charm.alloy.reload") as reload_mock,
+        patch("charm.alloy.restart") as restart_mock,
+    ):
         builder_cls.return_value.build.return_value = ""
         AlloySubCharm._configure(fake_charm)
 
@@ -256,13 +256,16 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         ),
     )
 
-    with patch("charm.ConfigBuilder") as builder_cls, patch(
-        "charm.alloy.ensure_config_dir_permissions"
-    ), patch("charm.alloy.write_config_text"), patch("charm.alloy.write_custom_args"), patch(
-        "charm.alloy.is_active", return_value=True
-    ), patch("charm.alloy.custom_args_applied", return_value=False), patch(
-        "charm.alloy.reload"
-    ) as reload_mock, patch("charm.alloy.restart") as restart_mock:
+    with (
+        patch("charm.ConfigBuilder") as builder_cls,
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.custom_args_applied", return_value=False),
+        patch("charm.alloy.reload") as reload_mock,
+        patch("charm.alloy.restart") as restart_mock,
+    ):
         builder_cls.return_value.build.return_value = ""
         AlloySubCharm._configure(fake_charm)
 
@@ -305,13 +308,16 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         ),
     )
 
-    with patch("charm.ConfigBuilder") as builder_cls, patch(
-        "charm.alloy.ensure_config_dir_permissions"
-    ), patch("charm.alloy.write_config_text"), patch("charm.alloy.write_custom_args"), patch(
-        "charm.alloy.is_active", return_value=True
-    ), patch("charm.alloy.custom_args_applied", return_value=True), patch(
-        "charm.alloy.reload"
-    ) as reload_mock, patch("charm.alloy.restart") as restart_mock:
+    with (
+        patch("charm.ConfigBuilder") as builder_cls,
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload") as reload_mock,
+        patch("charm.alloy.restart") as restart_mock,
+    ):
         builder_cls.return_value.build.return_value = ""
         AlloySubCharm._configure(fake_charm)
 
@@ -324,15 +330,19 @@ def test_removing_loki_relation_rewrites_config_when_remote_write_remains():
         metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
     )
 
-    with patch("charm.alloy.install"), patch("charm.alloy.preserve_default_config"), patch(
-        "charm.alloy.write_custom_args"
-    ), patch("charm.alloy.ensure_config_dir_permissions"), patch(
-        "charm.alloy.write_config_text"
-    ) as write_config, patch("charm.alloy.is_active", return_value=True), patch(
-        "charm.alloy.custom_args_applied", return_value=True
-    ), patch("charm.alloy.reload"), patch("charm.alloy.restart"), patch(
-        "charm.alloy.verify_config"
-    ), patch("charm.ConfigBuilder") as builder_cls:
+    with (
+        patch("charm.alloy.install"),
+        patch("charm.alloy.preserve_default_config"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text") as write_config,
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
         builder_cls.return_value.build.return_value = ""
         harness = testing.Harness(AlloySubCharm)
         harness.begin()
@@ -367,17 +377,20 @@ def test_removing_loki_relation_rewrites_config_when_remote_write_remains():
 
 
 def test_removing_last_sink_relation_sets_waiting_status():
-    with patch("charm.alloy.install"), patch("charm.alloy.preserve_default_config"), patch(
-        "charm.alloy.write_custom_args"
-    ), patch("charm.alloy.ensure_config_dir_permissions"), patch(
-        "charm.alloy.write_config_text"
-    ), patch("charm.alloy.restore_preserved_config"), patch(
-        "charm.alloy.is_active", return_value=True
-    ), patch(
-        "charm.alloy.custom_args_applied", return_value=True
-    ), patch("charm.alloy.reload"), patch("charm.alloy.restart"), patch(
-        "charm.alloy.verify_config"
-    ), patch("charm.ConfigBuilder") as builder_cls:
+    with (
+        patch("charm.alloy.install"),
+        patch("charm.alloy.preserve_default_config"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.restore_preserved_config"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
         builder_cls.return_value.build.return_value = ""
         harness = testing.Harness(AlloySubCharm)
         harness.begin()
@@ -410,17 +423,20 @@ def test_removing_last_sink_restores_safe_config_after_remote_write_then_loki():
         metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
     )
 
-    with patch("charm.alloy.install"), patch("charm.alloy.preserve_default_config"), patch(
-        "charm.alloy.write_custom_args"
-    ), patch("charm.alloy.ensure_config_dir_permissions"), patch(
-        "charm.alloy.write_config_text"
-    ), patch("charm.alloy.restore_preserved_config") as restore_config, patch(
-        "charm.alloy.is_active", return_value=True
-    ), patch("charm.alloy.custom_args_applied", return_value=True), patch(
-        "charm.alloy.reload"
-    ) as reload_mock, patch("charm.alloy.restart"), patch(
-        "charm.alloy.verify_config"
-    ), patch("charm.ConfigBuilder") as builder_cls:
+    with (
+        patch("charm.alloy.install"),
+        patch("charm.alloy.preserve_default_config"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.restore_preserved_config") as restore_config,
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload") as reload_mock,
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
         builder_cls.return_value.build.return_value = ""
         harness = testing.Harness(AlloySubCharm)
         harness.begin()
@@ -462,17 +478,20 @@ def test_removing_last_sink_restores_safe_config_after_loki_then_remote_write():
         metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
     )
 
-    with patch("charm.alloy.install"), patch("charm.alloy.preserve_default_config"), patch(
-        "charm.alloy.write_custom_args"
-    ), patch("charm.alloy.ensure_config_dir_permissions"), patch(
-        "charm.alloy.write_config_text"
-    ), patch("charm.alloy.restore_preserved_config") as restore_config, patch(
-        "charm.alloy.is_active", return_value=True
-    ), patch("charm.alloy.custom_args_applied", return_value=True), patch(
-        "charm.alloy.reload"
-    ) as reload_mock, patch("charm.alloy.restart"), patch(
-        "charm.alloy.verify_config"
-    ), patch("charm.ConfigBuilder") as builder_cls:
+    with (
+        patch("charm.alloy.install"),
+        patch("charm.alloy.preserve_default_config"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.restore_preserved_config") as restore_config,
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload") as reload_mock,
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
         builder_cls.return_value.build.return_value = ""
         harness = testing.Harness(AlloySubCharm)
         harness.begin()

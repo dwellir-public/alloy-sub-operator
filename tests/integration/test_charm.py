@@ -2,7 +2,6 @@
 # Copyright 2025 Erik Lönroth
 # See LICENSE file for licensing details.
 
-import asyncio
 import logging
 import os
 from pathlib import Path
@@ -22,7 +21,6 @@ POLKADOT_CHARM_PATH = os.environ.get("POLKADOT_CHARM_PATH")
 @pytest.mark.skipif(not POLKADOT_CHARM_PATH, reason="POLKADOT_CHARM_PATH not set")
 async def test_build_deploy_and_integrate_with_principal(ops_test: OpsTest):
     """Build both charms, deploy them, and validate the rendered subordinate config."""
-
     alloy_sub = await ops_test.build_charm(".")
     polkadot_charm = await ops_test.build_charm(POLKADOT_CHARM_PATH)
 

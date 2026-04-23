@@ -13,7 +13,6 @@ _FORBIDDEN_FLAGS = (
 
 def build_effective_custom_args(custom_args: str | None) -> str:
     """Return required Alloy args plus validated user-provided args."""
-
     user_tokens = shlex.split(custom_args or "")
     _validate_user_tokens(user_tokens)
     if not user_tokens:
@@ -23,7 +22,6 @@ def build_effective_custom_args(custom_args: str | None) -> str:
 
 def _validate_user_tokens(tokens: list[str]) -> None:
     """Reject user arguments that would override charm-owned settings."""
-
     for token in tokens:
         for forbidden_flag in _FORBIDDEN_FLAGS:
             if token == forbidden_flag or token.startswith(f"{forbidden_flag}="):

@@ -9,9 +9,7 @@ from dataclasses import dataclass, field
 
 DEFAULT_CONFIG_DIR = "/etc/alloy"
 DEFAULT_CONFIG_PATH = os.path.join(DEFAULT_CONFIG_DIR, "config.alloy")
-DEFAULT_PACKAGE_CONFIG_BACKUP_PATH = os.path.join(
-    DEFAULT_CONFIG_DIR, "config.alloy.package-default"
-)
+DEFAULT_PACKAGE_CONFIG_BACKUP_PATH = os.path.join(DEFAULT_CONFIG_DIR, "config.alloy.package-default")
 DEFAULT_CONFIG_BACKUP_PATH = os.path.join(DEFAULT_CONFIG_DIR, "config.alloy.bak")
 DEFAULT_SYSTEMD_DEFAULTS_PATH = "/etc/default/alloy"
 REMOTE_WRITE_COMPONENT_NAME = "metrics"
@@ -83,7 +81,6 @@ class ConfigBuilder:
 
     def build(self) -> str:
         """Return the rendered Alloy configuration."""
-
         blocks = []
         if self._remote_write_endpoints:
             blocks.extend([self._render_remote_write(), ""])
@@ -231,11 +228,7 @@ class ConfigBuilder:
                     [
                         "    {",
                         f'      __path__ = "{include}",',
-                        *(
-                            [f'      __path_exclude__ = "{self._combine_excludes(excludes)}",']
-                            if excludes
-                            else []
-                        ),
+                        *([f'      __path_exclude__ = "{self._combine_excludes(excludes)}",'] if excludes else []),
                         *self._render_label_lines(source.attributes, indent="      "),
                         "    },",
                     ]
@@ -278,9 +271,7 @@ class ConfigBuilder:
         )
 
     def _has_logs(self) -> bool:
-        return bool(
-            self._systemd_units or self._journal_match_expressions or self._file_log_sources
-        )
+        return bool(self._systemd_units or self._journal_match_expressions or self._file_log_sources)
 
     @staticmethod
     def _sanitize_component_name(name: str) -> str:
@@ -302,7 +293,4 @@ class ConfigBuilder:
         return json.dumps(key)
 
     def _render_label_lines(self, labels: dict[str, str], *, indent: str) -> list[str]:
-        return [
-            f"{indent}{self._render_key(key)} = {json.dumps(labels[key])},"
-            for key in sorted(labels)
-        ]
+        return [f"{indent}{self._render_key(key)} = {json.dumps(labels[key])}," for key in sorted(labels)]

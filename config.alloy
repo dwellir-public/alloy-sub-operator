@@ -29,7 +29,7 @@ prometheus.scrape "loki_lab_e96f52" {
 	forward_to = []
 }
 
-// Act as a syslog reciever UDP, forward to Loki
+// Act as a syslog receiver UDP, forward to Loki
 loki.source.syslog "local" {
 	listener {
 		address  = ":51898"

@@ -13,9 +13,7 @@ def test_build_effective_custom_args_uses_required_default_when_empty():
 
 
 def test_build_effective_custom_args_appends_user_args_after_required_default():
-    assert build_effective_custom_args("--log.level=debug") == (
-        f"{DEFAULT_LISTEN_ADDRESS} --log.level=debug"
-    )
+    assert build_effective_custom_args("--log.level=debug") == (f"{DEFAULT_LISTEN_ADDRESS} --log.level=debug")
 
 
 @pytest.mark.parametrize("custom_args", ["--server.http.listen-addr=127.0.0.1:12345", "--config.file=/tmp/test"])

@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 import sys
 from pathlib import Path
 
@@ -5,14 +7,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from charm import merge_file_excludes, translate_metrics_endpoint
 from charms.dwellir_observability.v0.machine_observability import MetricsEndpoint
+
+from charm import merge_file_excludes, translate_metrics_endpoint
 
 
 def test_metrics_translation_uses_principal_application_for_first_job_name():
-    endpoint = MetricsEndpoint.model_validate(
-        {"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}
-    )
+    endpoint = MetricsEndpoint.model_validate({"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"})
 
     translated = translate_metrics_endpoint(
         endpoint,

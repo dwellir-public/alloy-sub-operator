@@ -20,6 +20,8 @@ def test_charmcraft_uses_uv_baseline():
     assert "plugin: uv" in charmcraft
     assert "build-snaps:" in charmcraft
     assert "- astral-uv" in charmcraft
+    assert "ubuntu@22.04:amd64:" in charmcraft
+    assert "ubuntu@24.04:amd64:" in charmcraft
 
 
 def test_pyproject_has_uv_style_dependency_groups():
@@ -27,7 +29,7 @@ def test_pyproject_has_uv_style_dependency_groups():
 
     assert '[project]\nname = "alloy-sub"' in pyproject
     assert 'requires-python = ">=3.10"' in pyproject
-    assert '[dependency-groups]' in pyproject
+    assert "[dependency-groups]" in pyproject
     assert 'lint = ["ruff", "codespell"]' in pyproject
     assert 'unit = ["pytest", "coverage[toml]", "ops[testing]"]' in pyproject
     assert 'integration = ["pytest", "pytest-operator", "juju"]' in pyproject
@@ -53,6 +55,14 @@ def test_developing_doc_covers_local_setup_and_integration():
     assert "tox -e unit" in developing
     assert "charmcraft pack" in developing
     assert "CHARM_PATH=/path/to/alloy-sub.charm uv run pytest tests/integration -v" in developing
+
+
+def test_charm_tests_workflow_runs_pack():
+    workflow = Path(".github/workflows/charm-tests.yml").read_text()
+
+    assert "uv sync --group dev" in workflow
+    assert "tox -e unit" in workflow
+    assert "charmcraft pack" in workflow
 
 
 def test_architecture_doc_describes_subordinate_responsibilities():

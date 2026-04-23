@@ -16,6 +16,7 @@ from charms.dwellir_observability.v0.machine_observability import (
     build_machine_observability_payload,
     load_machine_observability_payload,
 )
+
 from src.principal_context import PrincipalContext
 
 
@@ -149,9 +150,7 @@ provides:
     relation_id = harness.add_relation("machine-observability", "alloy-sub")
     harness.add_relation_unit(relation_id, "alloy-sub/0")
 
-    payload = json.loads(
-        harness.get_relation_data(relation_id, harness.charm.app.name)["payload"]
-    )
+    payload = json.loads(harness.get_relation_data(relation_id, harness.charm.app.name)["payload"])
 
     assert payload["charm_name"] == "polkadot"
     assert payload["systemd_units"] == ["snap.polkadot.polkadot.service"]

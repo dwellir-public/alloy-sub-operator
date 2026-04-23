@@ -25,7 +25,6 @@ class PrincipalContext:
         charm_name: str = "",
     ) -> "PrincipalContext":
         """Build principal context from a subordinate attachment relation."""
-
         if hasattr(relation, "remote_unit_name"):
             application = relation.remote_app_name
             unit = relation.remote_unit_name
@@ -56,7 +55,6 @@ class PrincipalContext:
 
     def juju_labels(self, *, charm_name: str | None = None) -> dict[str, str]:
         """Render the principal context as Juju label key-value pairs."""
-
         labels = {
             "juju_model": self.model,
             "juju_model_uuid": self.model_uuid,
