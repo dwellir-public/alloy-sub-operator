@@ -4,10 +4,10 @@
 
 ```bash
 uv sync --group dev
-tox -e format
-tox -e lint
-tox -e static
-tox -e unit
+uv run tox -e format
+uv run tox -e lint
+uv run tox -e static
+uv run tox -e unit
 charmcraft pack
 ```
 

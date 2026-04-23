@@ -22,10 +22,10 @@ jobs:
       - name: Run static analysis tests
         run: |
           uv sync --group dev
-          tox -e format
-          tox -e lint
-          tox -e static
-          tox -e unit
+          uv run tox -e format
+          uv run tox -e lint
+          uv run tox -e static
+          uv run tox -e unit
 
   build-ubuntu-22:
     name: Build charm on ubuntu-22.04

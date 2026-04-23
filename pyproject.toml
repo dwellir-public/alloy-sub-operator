@@ -19,6 +19,7 @@ dev = [
   {include-group = "unit"},
   {include-group = "integration"},
   "pyright",
+  "tox",
 ]
 
 [tool.coverage.run]

@@ -34,6 +34,7 @@ def test_pyproject_has_uv_style_dependency_groups():
     assert 'unit = ["pytest", "coverage[toml]", "ops[testing]"]' in pyproject
     assert 'integration = ["pytest", "pytest-operator", "juju"]' in pyproject
     assert '"pyright"' in pyproject
+    assert '"tox"' in pyproject
 
 
 def test_tox_uses_uv_commands():
