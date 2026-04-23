@@ -1,4 +1,4 @@
-name: Charm Tests
+name: Charm Tests (no charmcraft)
 
 on:
   push:
@@ -21,9 +21,6 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Install Charmcraft
-        run: sudo snap install charmcraft --classic --channel latest/stable
-
       - name: Run charm static tests
         run: |
           uv sync --group dev
@@ -31,4 +28,3 @@ jobs:
           uv run tox -e lint
           uv run tox -e static
           uv run tox -e unit
-          charmcraft pack --destructive-mode --debug --verbosity=verbose

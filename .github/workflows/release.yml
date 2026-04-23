@@ -4,33 +4,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  static-tests:
-    name: Run unit tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Run static analysis tests
-        run: |
-          uv sync --group dev
-          uv run tox -e format
-          uv run tox -e lint
-          uv run tox -e static
-          uv run tox -e unit
 
   build-ubuntu-22:
     name: Build charm on ubuntu-22.04
-    needs:
-      - static-tests
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -51,8 +27,6 @@ jobs:
 
   build-ubuntu-24:
     name: Build charm on ubuntu-24.04
-    needs:
-      - static-tests
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
