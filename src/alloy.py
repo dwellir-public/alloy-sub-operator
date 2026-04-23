@@ -264,6 +264,30 @@ def write_config_text(
     _write_file_atomic(backup_path, config_text)
 
 
+def restore_preserved_config(
+    *,
+    config_path: Path = Path(DEFAULT_CONFIG_PATH),
+    backup_path: Path = Path(DEFAULT_CONFIG_BACKUP_PATH),
+    preserved_path: Path = Path(DEFAULT_PACKAGE_CONFIG_BACKUP_PATH),
+) -> bool:
+    """Restore the preserved package config and return whether files changed."""
+
+    if not preserved_path.exists():
+        raise FileNotFoundError(f"Preserved Alloy config not found at {preserved_path}")
+
+    content = preserved_path.read_text(encoding="utf-8")
+    changed = False
+
+    if not _file_has_content(config_path, content):
+        _write_file_atomic(config_path, content)
+        changed = True
+    if not _file_has_content(backup_path, content):
+        _write_file_atomic(backup_path, content)
+        changed = True
+
+    return changed
+
+
 def preserve_default_config(
     *,
     config_path: Path = Path(DEFAULT_CONFIG_PATH),
@@ -351,6 +375,13 @@ def _write_file_atomic(path: Path, content: str) -> None:
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     tmp_path.write_text(content, encoding="utf-8")
     tmp_path.replace(path)
+
+
+def _file_has_content(path: Path, expected: str) -> bool:
+    try:
+        return path.read_text(encoding="utf-8") == expected
+    except OSError:
+        return False
 
 
 def _format_custom_args(custom_args: str) -> str:

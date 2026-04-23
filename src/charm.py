@@ -156,14 +156,10 @@ class AlloySubCharm(ops.CharmBase):
         self.framework.observe(self.on.juju_info_relation_joined, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_changed, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_broken, self._on_relation_event)
-        self.framework.observe(
-            self.on["machine-observability"].relation_changed,
-            self._on_relation_event,
-        )
-        self.framework.observe(
-            self.on["machine-observability"].relation_broken,
-            self._on_relation_event,
-        )
+        
+        for relation_name in ("machine-observability", "send-loki-logs", "send-remote-write"):
+            for event in ("relation_joined", "relation_changed", "relation_broken"):
+                self.framework.observe(getattr(self.on[relation_name], event), self._on_relation_event)
 
     def _on_install(self, event: ops.InstallEvent) -> None:
         """Install Alloy and preserve the package-provided config."""
@@ -185,8 +181,9 @@ class AlloySubCharm(ops.CharmBase):
             version = alloy.get_version()
             if version:
                 self.unit.set_workload_version(version)
-            self._configure()
-            self.unit.status = ops.ActiveStatus("Alloy is running")
+            configured = self._configure()
+            if configured:
+                self.unit.status = ops.ActiveStatus("Alloy is running")
         except Exception as exc:  # noqa: BLE001
             self.unit.status = ops.BlockedStatus(f"Failed to start Alloy: {exc}")
             event.defer()
@@ -201,8 +198,9 @@ class AlloySubCharm(ops.CharmBase):
         """Rewrite and apply config after charm config changes."""
 
         try:
-            self._configure()
-            self.unit.status = ops.ActiveStatus("Alloy config updated")
+            configured = self._configure()
+            if configured:
+                self.unit.status = ops.ActiveStatus("Alloy config updated")
         except Exception as exc:  # noqa: BLE001
             self.unit.status = ops.BlockedStatus(f"Config failed: {exc}")
             event.defer()
@@ -211,24 +209,36 @@ class AlloySubCharm(ops.CharmBase):
         """Re-render config when principal relations change."""
 
         try:
-            self._configure()
-            if alloy.is_active():
+            configured = self._configure()
+            if configured and alloy.is_active():
                 self.unit.status = ops.ActiveStatus("Alloy config updated")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Relation-driven config update failed: %s", exc)
             event.defer()
 
-    def _configure(self) -> None:
+    def _configure(self) -> bool:
         """Render, validate, and apply Alloy config from relation data."""
 
         principal_context = self._principal_context()
+        loki_endpoints = self._loki_endpoint_urls()
+        remote_write_endpoints = self._remote_write_endpoint_urls()
+        missing_relations = self._missing_relation_requirements(
+            principal_context=principal_context,
+            loki_endpoints=loki_endpoints,
+            remote_write_endpoints=remote_write_endpoints,
+        )
+
+        if missing_relations:
+            self._reset_config_for_missing_relations()
+            self.unit.status = ops.WaitingStatus(self._relation_waiting_message(missing_relations))
+            return False
+
         payload = self._observability_payload()
-        if principal_context is None:
-            return
+        logger.info("Configuring Alloy with principal context: %s and payload: %s", principal_context, payload)
 
         builder = ConfigBuilder(
-            loki_endpoints=self._loki_endpoint_urls(),
-            remote_write_endpoints=self._remote_write_endpoint_urls(),
+            loki_endpoints=loki_endpoints,
+            remote_write_endpoints=remote_write_endpoints,
             metrics_scrape_jobs=self._active_metrics_scrape_jobs(payload, principal_context),
             systemd_units=payload.systemd_units,
             journal_match_expressions=payload.journal_match_expressions,
@@ -258,13 +268,79 @@ class AlloySubCharm(ops.CharmBase):
         self._stored.last_good_config = config_text
         self._stored.last_custom_args = desired_custom_args
         if alloy.is_active():
-            if (
-                previous_custom_args != desired_custom_args
-                or not alloy.custom_args_applied(desired_custom_args)
-            ):
-                alloy.restart()
-            else:
-                alloy.reload()
+            self._apply_runtime_update(
+                desired_custom_args=desired_custom_args,
+                previous_custom_args=previous_custom_args,
+            )
+        return True
+
+    @staticmethod
+    def _relation_waiting_message(missing_relations: list[str]) -> str:
+        """Render a waiting message for the currently missing relation requirements."""
+
+        parts = [
+            requirement
+            if requirement.startswith("one of ")
+            else f"{requirement} relation"
+            for requirement in missing_relations
+        ]
+        if len(parts) == 1:
+            return f"Waiting for {parts[0]}"
+        return f"Waiting for {', '.join(parts[:-1])}, and {parts[-1]}"
+
+    def _missing_relation_requirements(
+        self,
+        *,
+        principal_context: PrincipalContext | None,
+        loki_endpoints: list[str],
+        remote_write_endpoints: list[str],
+    ) -> list[str]:
+        """Return required relation inputs that are still missing."""
+
+        missing_relations: list[str] = []
+        if principal_context is None:
+            missing_relations.append("juju-info")
+        if not self._has_machine_observability_relation():
+            missing_relations.append("machine-observability")
+        if not (loki_endpoints or remote_write_endpoints):
+            missing_relations.append("one of send-loki-logs or send-remote-write relations")
+        return missing_relations
+
+    def _reset_config_for_missing_relations(self) -> None:
+        """Restore a safe config when required relations are missing."""
+
+        if not self._stored.last_good_config:
+            return
+
+        desired_custom_args = self._desired_custom_args()
+        previous_custom_args = self._stored.last_custom_args
+
+        alloy.ensure_config_dir_permissions(str(Path(DEFAULT_CONFIG_PATH).parent))
+        config_reset = alloy.restore_preserved_config(config_path=Path(DEFAULT_CONFIG_PATH))
+        alloy.write_custom_args(desired_custom_args)
+        self._stored.last_good_config = ""
+        self._stored.last_custom_args = desired_custom_args
+
+        if alloy.is_active() and (
+            config_reset
+            or previous_custom_args != desired_custom_args
+            or not alloy.custom_args_applied(desired_custom_args)
+        ):
+            self._apply_runtime_update(
+                desired_custom_args=desired_custom_args,
+                previous_custom_args=previous_custom_args,
+            )
+
+    def _apply_runtime_update(self, *, desired_custom_args: str, previous_custom_args: str) -> None:
+        """Apply updated config or custom args to the running Alloy service."""
+
+        if (
+            previous_custom_args != desired_custom_args
+            or not alloy.custom_args_applied(desired_custom_args)
+        ):
+            alloy.restart()
+        else:
+            alloy.reload()
 
     def _validate_config(self, config_text: str) -> None:
         """Validate config text using a temporary file."""
@@ -296,6 +372,11 @@ class AlloySubCharm(ops.CharmBase):
         if relation is None:
             return MachineObservabilityPayload()
         return self.machine_observability_consumer.get_payload(relation)
+
+    def _has_machine_observability_relation(self) -> bool:
+        """Return whether the machine-observability relation is currently present."""
+
+        return self.model.get_relation("machine-observability") is not None
 
     def _desired_custom_args(self) -> str:
         """Return the desired Alloy service args."""
