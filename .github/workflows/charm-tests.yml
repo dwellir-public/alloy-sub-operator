@@ -31,4 +31,4 @@ jobs:
           uv run tox -e lint
           uv run tox -e static
           uv run tox -e unit
-          charmcraft pack
+          charmcraft pack --destructive-mode --debug --verbosity=verbose
