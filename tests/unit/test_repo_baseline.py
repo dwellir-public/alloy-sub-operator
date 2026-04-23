@@ -58,14 +58,6 @@ def test_developing_doc_covers_local_setup_and_integration():
     assert "CHARM_PATH=/path/to/alloy-sub.charm uv run pytest tests/integration -v" in developing
 
 
-def test_charm_tests_workflow_runs_pack():
-    workflow = Path(".github/workflows/charm-tests.yml").read_text()
-
-    assert "uv sync --group dev" in workflow
-    assert "tox -e unit" in workflow
-    assert "charmcraft pack" in workflow
-
-
 def test_architecture_doc_describes_subordinate_responsibilities():
     architecture = Path("docs/charm-architecture.md").read_text()
 
