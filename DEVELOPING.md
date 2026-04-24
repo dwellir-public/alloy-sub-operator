@@ -16,3 +16,11 @@ charmcraft pack
 ```bash
 CHARM_PATH=/path/to/alloy-sub.charm uv run pytest tests/integration -v
 ```
+
+## Releasing to charmhub
+
+Get a new token.
+
+```bash
+charmcraft login --export=secrets.auth --charm=reth --permission=package-manage --permission=package-view --channel=latest/edge --ttl=31536000
+```

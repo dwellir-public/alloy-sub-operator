@@ -35,6 +35,7 @@ try:
     )
     from .custom_args import build_effective_custom_args
     from .principal_context import PrincipalContext
+    from .relation_metadata import build_remote_write_metadata
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
         MachineObservabilityConsumer,
@@ -56,6 +57,7 @@ except ImportError:
     )
     from custom_args import build_effective_custom_args
     from principal_context import PrincipalContext
+    from relation_metadata import build_remote_write_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +162,8 @@ class AlloySubCharm(ops.CharmBase):
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.on.stop, self._on_stop)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
+        self.framework.observe(self.on.leader_elected, self._on_leader_elected)
+        self.framework.observe(self.on.upgrade_charm, self._on_upgrade_charm)
         self.framework.observe(self.on.juju_info_relation_joined, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_changed, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_broken, self._on_relation_event)
@@ -208,9 +212,26 @@ class AlloySubCharm(ops.CharmBase):
             self.unit.status = ops.BlockedStatus(f"Config failed: {exc}")
             event.defer()
 
+    def _on_leader_elected(self, event: ops.LeaderElectedEvent) -> None:
+        """Republish remote-write metadata after a leadership change."""
+        try:
+            self._publish_remote_write_metadata()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Leader-elected remote-write metadata update failed: %s", exc)
+            event.defer()
+
+    def _on_upgrade_charm(self, event: ops.UpgradeCharmEvent) -> None:
+        """Republish remote-write metadata after charm upgrade."""
+        try:
+            self._publish_remote_write_metadata()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Upgrade remote-write metadata update failed: %s", exc)
+            event.defer()
+
     def _on_relation_event(self, event: ops.RelationEvent) -> None:
         """Re-render config when principal relations change."""
         try:
+            self._publish_remote_write_metadata()
             configured = self._configure()
             if configured and alloy.is_active():
                 self.unit.status = ops.ActiveStatus("Alloy config updated")
@@ -386,6 +407,34 @@ class AlloySubCharm(ops.CharmBase):
             direct_keys=("url",),
             json_keys=("remote_write", "endpoints"),
         )
+
+    def _publish_remote_write_metadata(self) -> None:
+        """Publish tenant metadata for all outbound remote-write relations.
+
+        Strategy:
+        - use the attached principal application as the operational identity
+        - derive a readable tenant id from principal app and model UUID
+        - clear stale metadata when principal context is unavailable
+        """
+        if not self.unit.is_leader():
+            return
+
+        principal_context = self._principal_context()
+        metadata_keys = ("tenant-id", "application", "model", "model_uuid")
+
+        for relation in self.model.relations.get("send-remote-write", []):
+            relation_data = relation.data[self.app]
+            if principal_context is None:
+                for key in metadata_keys:
+                    relation_data.pop(key, None)
+                continue
+            relation_data.update(
+                build_remote_write_metadata(
+                    application=principal_context.application,
+                    model=principal_context.model,
+                    model_uuid=principal_context.model_uuid,
+                )
+            )
 
     def _active_metrics_scrape_jobs(
         self, payload: MachineObservabilityPayload, principal_context: PrincipalContext
