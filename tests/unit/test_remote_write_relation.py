@@ -1,4 +1,3 @@
-import re
 import sys
 from pathlib import Path
 
@@ -12,14 +11,7 @@ from charm import AlloySubCharm
 MODEL_NAME = "polka-obs"
 MODEL_UUID = "00000000-0000-4000-8000-000000000222"
 
-
-def _expected_tenant_id(application: str, model_uuid: str) -> str:
-    short_model_uuid = re.sub(r"[^a-z0-9]+", "", model_uuid.lower())[:8]
-    base = f"{application}-{short_model_uuid}" if short_model_uuid else application
-    return re.sub(r"[^a-z0-9-]+", "-", base.lower()).strip("-")
-
-
-def test_send_remote_write_relation_publishes_principal_tenant_metadata():
+def test_send_remote_write_relation_does_not_publish_tenant_metadata():
     harness = testing.Harness(AlloySubCharm)
     harness.set_leader(True)
     harness.set_model_name(MODEL_NAME)
@@ -35,7 +27,4 @@ def test_send_remote_write_relation_publishes_principal_tenant_metadata():
 
     relation_data = harness.get_relation_data(relation_id, harness.charm.app.name)
 
-    assert relation_data["application"] == "polkadot"
-    assert relation_data["model"] == MODEL_NAME
-    assert relation_data["model_uuid"] == MODEL_UUID
-    assert relation_data["tenant-id"] == _expected_tenant_id("polkadot", MODEL_UUID)
+    assert relation_data == {}

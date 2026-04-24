@@ -19,7 +19,7 @@ and consumes generic workload source declarations from the principal over
 - `juju-info`: subordinate attachment and principal unit discovery
 - `machine-observability`: generic workload source declarations from the principal
 - `send-loki-logs`: outbound Loki forwarding
-- `send-remote-write`: outbound metrics forwarding plus tenant metadata publication
+- `send-remote-write`: outbound metrics forwarding
 
 ## Migration Notes
 
@@ -28,7 +28,8 @@ and consumes generic workload source declarations from the principal over
   `juju_unit` from the attached principal relation
 - `juju_charm` is optional metadata from the principal payload, not required for
   the core contract
-- for `send-remote-write`, `alloy-sub` publishes `tenant-id`, `application`,
-  `model`, and `model_uuid` using the attached principal identity rather than the
-  subordinate application name, so remote gateways can expose human-readable
-  per-tenant routes
+- for `send-remote-write`, `alloy-sub` consumes the standard shared
+  `prometheus_remote_write` URL contract only
+- partitioning in the shared observability deployment is done through metric
+  labels such as `juju_model`, `juju_model_uuid`, `juju_application`, and
+  `juju_unit`, not by publishing tenant metadata on the relation

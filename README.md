@@ -22,6 +22,12 @@ To properly integrate with the principal, it consumes `machine-observability` de
 - `send-loki-logs`: outbound Loki forwarding
 - `send-remote-write`: outbound metrics forwarding
 
+For the shared observability deployment, `send-remote-write` uses the plain
+`prometheus_remote_write` URL contract. `alloy-sub` does not publish tenant
+identity or tenant metadata on that relation. Shared Mimir partitioning is done
+through metric labels such as Juju topology rather than tenant-specific
+remote-write extensions.
+
 ## Validation Flow
 
 Deploy the subordinate and principal, relate both relation endpoints, then inspect
