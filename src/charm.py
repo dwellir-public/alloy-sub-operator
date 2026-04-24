@@ -35,7 +35,9 @@ try:
     )
     from .custom_args import build_effective_custom_args
     from .principal_context import PrincipalContext
-    from .relation_metadata import build_remote_write_metadata
+    from .prometheus_remote_write_extensions import (
+        build_prometheus_remote_write_extension_metadata,
+    )
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
         MachineObservabilityConsumer,
@@ -57,7 +59,9 @@ except ImportError:
     )
     from custom_args import build_effective_custom_args
     from principal_context import PrincipalContext
-    from relation_metadata import build_remote_write_metadata
+    from prometheus_remote_write_extensions import (
+        build_prometheus_remote_write_extension_metadata,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -429,7 +433,7 @@ class AlloySubCharm(ops.CharmBase):
                     relation_data.pop(key, None)
                 continue
             relation_data.update(
-                build_remote_write_metadata(
+                build_prometheus_remote_write_extension_metadata(
                     application=principal_context.application,
                     model=principal_context.model,
                     model_uuid=principal_context.model_uuid,

@@ -40,8 +40,10 @@ def _tenant_id_for_relation(application: str, model_uuid: str) -> str:
     return tenant_id
 
 
-def build_remote_write_metadata(*, application: str, model: str, model_uuid: str) -> dict[str, str]:
-    """Return relation metadata for outbound prometheus_remote_write relations."""
+def build_prometheus_remote_write_extension_metadata(
+    *, application: str, model: str, model_uuid: str
+) -> dict[str, str]:
+    """Return extension metadata for outbound prometheus_remote_write relations."""
     application = str(application or "")
     model = str(model or "")
     model_uuid = str(model_uuid or "")
