@@ -212,21 +212,30 @@ class AlloySubCharm(ops.CharmBase):
 
     def _on_leader_elected(self, event: ops.LeaderElectedEvent) -> None:
         """Reconcile config after a leadership change."""
-        self._on_relation_event(event)
+        self._reconcile_config(event)
 
     def _on_upgrade_charm(self, event: ops.UpgradeCharmEvent) -> None:
         """Reconcile config after charm upgrade."""
-        self._on_relation_event(event)
+        self._reconcile_config(event)
 
     def _on_relation_event(self, event: ops.RelationEvent) -> None:
         """Re-render config when principal relations change."""
+        self._reconcile_config(event, defer_on_failure=True)
+
+    def _reconcile_config(self, event: ops.EventBase, defer_on_failure: bool = False) -> None:
+        """Re-render config for lifecycle and relation events.
+
+        Relation events may be deferred on transient failures; other event types
+        are reconciled immediately without assuming defer support.
+        """
         try:
             configured = self._configure()
             if configured and alloy.is_active():
                 self.unit.status = ops.ActiveStatus("Alloy config updated")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Relation-driven config update failed: %s", exc)
-            event.defer()
+            if defer_on_failure:
+                event.defer()
 
     def _configure(self) -> bool:
         """Render, validate, and apply Alloy config from relation data."""
