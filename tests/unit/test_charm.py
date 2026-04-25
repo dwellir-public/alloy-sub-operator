@@ -328,8 +328,8 @@ def test_start_waits_for_declared_metrics_without_remote_write_sink():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.WaitingStatus(
-        "Alloy service running; config valid; waiting for send-remote-write relation for declared metrics endpoints"
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; Alloy is running"
     )
 
 
@@ -370,8 +370,8 @@ def test_start_waits_for_declared_logs_without_loki_sink():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.WaitingStatus(
-        "Alloy service running; config valid; waiting for send-loki-logs relation for declared log sources"
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; Alloy is running"
     )
 
 
@@ -417,8 +417,8 @@ def test_start_waits_for_declared_logs_when_only_remote_write_sink_exists():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.WaitingStatus(
-        "Alloy service running; config valid; waiting for send-loki-logs relation for declared log sources"
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; Alloy is running"
     )
 
 
@@ -462,9 +462,8 @@ def test_start_waits_for_both_declared_pipelines_when_both_sinks_are_missing():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.WaitingStatus(
-        "Alloy service running; config valid; waiting for send-loki-logs relation for declared log sources and "
-        "send-remote-write relation for declared metrics endpoints"
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; Alloy is running"
     )
 
 
@@ -763,7 +762,7 @@ def test_removing_last_sink_relation_keeps_active_status_for_noop_payload():
     )
 
 
-def test_removing_last_sink_keeps_waiting_for_declared_metrics_after_remote_write_then_loki():
+def test_removing_last_sink_keeps_active_for_declared_metrics_after_remote_write_then_loki():
     payload = _machine_observability_payload(
         metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
     )
@@ -812,12 +811,12 @@ def test_removing_last_sink_keeps_waiting_for_declared_metrics_after_remote_writ
 
     assert builder_cls.call_count == writes_before_last_remove + 1
     assert reload_mock.call_count == reloads_before_last_remove + 1
-    assert harness.model.unit.status == testing.WaitingStatus(
-        "Alloy service running; config valid; waiting for send-remote-write relation for declared metrics endpoints"
+    assert harness.model.unit.status == testing.ActiveStatus(
+        "Alloy service running; config valid; Alloy config updated"
     )
 
 
-def test_removing_last_sink_keeps_waiting_for_declared_metrics_after_loki_then_remote_write():
+def test_removing_last_sink_keeps_active_for_declared_metrics_after_loki_then_remote_write():
     payload = _machine_observability_payload(
         metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
     )
@@ -866,6 +865,6 @@ def test_removing_last_sink_keeps_waiting_for_declared_metrics_after_loki_then_r
 
     assert builder_cls.call_count == writes_before_last_remove + 1
     assert reload_mock.call_count == reloads_before_last_remove + 1
-    assert harness.model.unit.status == testing.WaitingStatus(
-        "Alloy service running; config valid; waiting for send-remote-write relation for declared metrics endpoints"
+    assert harness.model.unit.status == testing.ActiveStatus(
+        "Alloy service running; config valid; Alloy config updated"
     )

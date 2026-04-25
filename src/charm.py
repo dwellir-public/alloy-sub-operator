@@ -262,38 +262,25 @@ class AlloySubCharm(ops.CharmBase):
         payload = self._observability_payload()
         loki_endpoints = self._loki_endpoint_urls()
         remote_write_endpoints = self._remote_write_endpoint_urls()
-        logs_declared = self._logs_declared(payload)
-        metrics_declared = bool(payload.metrics_endpoints)
-        logs_enabled = logs_declared and bool(loki_endpoints)
-        metrics_enabled = metrics_declared and bool(remote_write_endpoints)
         waiting_requirements = self._missing_relation_requirements(
             principal_context=principal_context,
-            payload=payload,
-            loki_endpoints=loki_endpoints,
-            remote_write_endpoints=remote_write_endpoints,
         )
         logger.info("Configuring Alloy with principal context: %s and payload: %s", principal_context, payload)
 
         builder = ConfigBuilder(
-            loki_endpoints=loki_endpoints if logs_enabled else [],
-            remote_write_endpoints=remote_write_endpoints if metrics_enabled else [],
-            metrics_scrape_jobs=(
-                self._active_metrics_scrape_jobs(payload, principal_context) if metrics_enabled else []
-            ),
-            systemd_units=payload.systemd_units if logs_enabled else [],
-            journal_match_expressions=payload.journal_match_expressions if logs_enabled else [],
-            file_log_sources=(
-                [
-                    BuilderFileLogSource(
-                        include=source.include,
-                        exclude=merge_file_excludes(source.exclude, self._path_exclude_patterns()),
-                        attributes=source.attributes,
-                    )
-                    for source in payload.log_files
-                ]
-                if logs_enabled
-                else []
-            ),
+            loki_endpoints=loki_endpoints,
+            remote_write_endpoints=remote_write_endpoints,
+            metrics_scrape_jobs=self._active_metrics_scrape_jobs(payload, principal_context),
+            systemd_units=payload.systemd_units,
+            journal_match_expressions=payload.journal_match_expressions,
+            file_log_sources=[
+                BuilderFileLogSource(
+                    include=source.include,
+                    exclude=merge_file_excludes(source.exclude, self._path_exclude_patterns()),
+                    attributes=source.attributes,
+                )
+                for source in payload.log_files
+            ],
             topology_labels=principal_context.juju_labels(charm_name=payload.charm_name),
             global_scrape_interval=self._global_scrape_interval(),
             global_scrape_timeout=self._global_scrape_timeout(),
@@ -353,9 +340,6 @@ class AlloySubCharm(ops.CharmBase):
         self,
         *,
         principal_context: PrincipalContext | None,
-        payload: MachineObservabilityPayload | None = None,
-        loki_endpoints: list[str],
-        remote_write_endpoints: list[str],
     ) -> list[str]:
         """Return required relation inputs that are still missing."""
         missing_relations: list[str] = []
@@ -363,14 +347,6 @@ class AlloySubCharm(ops.CharmBase):
             missing_relations.append("juju-info relation")
         if not self._has_machine_observability_relation():
             missing_relations.append("machine-observability relation")
-        if payload is None:
-            return missing_relations
-        if self._logs_declared(payload) and not loki_endpoints:
-            missing_relations.append("send-loki-logs relation for declared log sources")
-        if payload.metrics_endpoints and not remote_write_endpoints:
-            missing_relations.append(
-                "send-remote-write relation for declared metrics endpoints"
-            )
         return missing_relations
 
     def _reset_config_for_missing_relations(self) -> None:
@@ -460,8 +436,6 @@ class AlloySubCharm(ops.CharmBase):
         self, payload: MachineObservabilityPayload, principal_context: PrincipalContext
     ) -> list[BuilderMetricsScrapeJob]:
         """Translate active metrics endpoints from the machine-observability payload."""
-        if not self._remote_write_endpoint_urls():
-            return []
         topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
         translated_jobs = [
             translate_metrics_endpoint(

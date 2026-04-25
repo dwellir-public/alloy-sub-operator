@@ -95,7 +95,36 @@ def test_build_renders_remote_write_metrics():
     assert '__address__ = "10.0.0.5:9615"' in config
 
 
-def test_build_skips_log_pipeline_without_loki_sink():
+def test_build_renders_metrics_scrape_without_remote_write_sink():
+    job = MetricsScrapeJob(
+        job_name="polkadot",
+        targets=[ScrapeTarget(address="10.0.0.5:9615", labels={"juju_application": "polkadot"})],
+        metrics_path="/metrics",
+    )
+    builder = ConfigBuilder(
+        loki_endpoints=[],
+        remote_write_endpoints=[],
+        metrics_scrape_jobs=[job],
+        systemd_units=[],
+        journal_match_expressions=[],
+        file_log_sources=[],
+        topology_labels={},
+        global_scrape_interval="1m",
+        global_scrape_timeout="10s",
+        path_exclude=[],
+        queue_size=1000,
+        max_elapsed_time_min=5,
+        tls_insecure_skip_verify=False,
+    )
+
+    config = builder.build()
+
+    assert 'prometheus.scrape "polkadot"' in config
+    assert "forward_to = []" in config
+    assert 'prometheus.remote_write "metrics"' not in config
+
+
+def test_build_renders_log_pipeline_without_loki_sink():
     builder = ConfigBuilder(
         loki_endpoints=[],
         remote_write_endpoints=["http://mimir:9009/api/v1/push"],
@@ -115,6 +144,7 @@ def test_build_skips_log_pipeline_without_loki_sink():
     config = builder.build()
 
     assert 'prometheus.remote_write "metrics"' in config
-    assert "loki.source.journal" not in config
-    assert 'loki.process "juju"' not in config
+    assert 'loki.source.journal "journald"' in config
+    assert 'loki.process "juju"' in config
+    assert "forward_to = []" in config
     assert 'loki.write "main"' not in config

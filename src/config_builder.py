@@ -86,13 +86,14 @@ class ConfigBuilder:
             blocks.extend([self._render_remote_write(), ""])
         for job in self._metrics_scrape_jobs:
             blocks.extend([self._render_metrics_scrape(job), ""])
-        if self._has_log_pipeline():
+        if self._has_log_sources():
             blocks.extend([self._render_juju_processor(), ""])
             blocks.extend(self._render_journal_sources())
             filelog_sources = self._render_filelog_sources()
             if filelog_sources:
                 blocks.extend(filelog_sources)
-            blocks.extend([self._render_loki_writer(), ""])
+            if self._loki_endpoints:
+                blocks.extend([self._render_loki_writer(), ""])
         return "\n".join(blocks).rstrip() + "\n"
 
     def _render_remote_write(self) -> str:
@@ -123,6 +124,11 @@ class ConfigBuilder:
 
     def _render_metrics_scrape(self, scrape_job: MetricsScrapeJob) -> str:
         component_name = self._sanitize_component_name(scrape_job.job_name)
+        forward_to = (
+            f"[prometheus.remote_write.{REMOTE_WRITE_COMPONENT_NAME}.receiver]"
+            if self._remote_write_endpoints
+            else "[]"
+        )
         lines = [
             f'prometheus.scrape "{component_name}" {{',
             "  targets = [",
@@ -133,7 +139,7 @@ class ConfigBuilder:
             f"  scheme = {json.dumps(scrape_job.scheme)}",
             f"  scrape_interval = {json.dumps(scrape_job.scrape_interval or self._global_scrape_interval)}",
             f"  scrape_timeout = {json.dumps(scrape_job.scrape_timeout or self._global_scrape_timeout)}",
-            f"  forward_to = [prometheus.remote_write.{REMOTE_WRITE_COMPONENT_NAME}.receiver]",
+            f"  forward_to = {forward_to}",
         ]
         if scrape_job.tls_config or self._tls_insecure_skip_verify:
             tls_config = dict(scrape_job.tls_config)
@@ -236,6 +242,7 @@ class ConfigBuilder:
         return rendered
 
     def _render_juju_processor(self) -> str:
+        forward_to = "[loki.write.main.receiver]" if self._loki_endpoints else "[]"
         return "\n".join(
             [
                 'loki.process "juju" {',
@@ -244,7 +251,7 @@ class ConfigBuilder:
                 *self._render_label_lines(self._topology_labels, indent="      "),
                 "    }",
                 "  }",
-                "  forward_to = [loki.write.main.receiver]",
+                f"  forward_to = {forward_to}",
                 "}",
             ]
         )
@@ -272,9 +279,6 @@ class ConfigBuilder:
 
     def _has_log_sources(self) -> bool:
         return bool(self._systemd_units or self._journal_match_expressions or self._file_log_sources)
-
-    def _has_log_pipeline(self) -> bool:
-        return bool(self._loki_endpoints) and self._has_log_sources()
 
     @staticmethod
     def _sanitize_component_name(name: str) -> str:
