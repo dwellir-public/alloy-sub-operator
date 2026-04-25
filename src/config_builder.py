@@ -86,13 +86,13 @@ class ConfigBuilder:
             blocks.extend([self._render_remote_write(), ""])
         for job in self._metrics_scrape_jobs:
             blocks.extend([self._render_metrics_scrape(job), ""])
-        if self._has_logs():
+        if self._has_log_pipeline():
             blocks.extend([self._render_juju_processor(), ""])
             blocks.extend(self._render_journal_sources())
-            if self._render_filelog_sources():
-                blocks.extend(self._render_filelog_sources())
-            if self._loki_endpoints:
-                blocks.extend([self._render_loki_writer(), ""])
+            filelog_sources = self._render_filelog_sources()
+            if filelog_sources:
+                blocks.extend(filelog_sources)
+            blocks.extend([self._render_loki_writer(), ""])
         return "\n".join(blocks).rstrip() + "\n"
 
     def _render_remote_write(self) -> str:
@@ -270,8 +270,11 @@ class ConfigBuilder:
             ]
         )
 
-    def _has_logs(self) -> bool:
+    def _has_log_sources(self) -> bool:
         return bool(self._systemd_units or self._journal_match_expressions or self._file_log_sources)
+
+    def _has_log_pipeline(self) -> bool:
+        return bool(self._loki_endpoints) and self._has_log_sources()
 
     @staticmethod
     def _sanitize_component_name(name: str) -> str:

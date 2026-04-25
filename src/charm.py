@@ -160,6 +160,7 @@ class AlloySubCharm(ops.CharmBase):
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.on.stop, self._on_stop)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
+        self.framework.observe(self.on.update_status, self._on_update_status)
         self.framework.observe(self.on.leader_elected, self._on_leader_elected)
         self.framework.observe(self.on.upgrade_charm, self._on_upgrade_charm)
         self.framework.observe(self.on.juju_info_relation_joined, self._on_relation_event)
@@ -188,11 +189,9 @@ class AlloySubCharm(ops.CharmBase):
             version = alloy.get_version()
             if version:
                 self.unit.set_workload_version(version)
-            configured = self._configure()
-            if configured:
-                self.unit.status = ops.ActiveStatus("Alloy is running")
+            self._configure(active_message="Alloy is running")
         except Exception as exc:  # noqa: BLE001
-            self.unit.status = ops.BlockedStatus(f"Failed to start Alloy: {exc}")
+            self.unit.status = ops.BlockedStatus(self._status_message(f"config invalid: {exc}"))
             event.defer()
 
     def _on_stop(self, _: ops.StopEvent) -> None:
@@ -203,12 +202,20 @@ class AlloySubCharm(ops.CharmBase):
     def _on_config_changed(self, event: ops.ConfigChangedEvent) -> None:
         """Rewrite and apply config after charm config changes."""
         try:
-            configured = self._configure()
-            if configured:
-                self.unit.status = ops.ActiveStatus("Alloy config updated")
+            self._configure(active_message="Alloy config updated")
         except Exception as exc:  # noqa: BLE001
-            self.unit.status = ops.BlockedStatus(f"Config failed: {exc}")
+            self.unit.status = ops.BlockedStatus(self._status_message(f"config invalid: {exc}"))
             event.defer()
+
+    def _on_update_status(self, event: ops.UpdateStatusEvent) -> None:
+        """Reconcile config and workload health during periodic status updates."""
+        try:
+            version = alloy.get_version()
+            if version:
+                self.unit.set_workload_version(version)
+            self._configure(active_message="Alloy config updated")
+        except Exception as exc:  # noqa: BLE001
+            self.unit.status = ops.BlockedStatus(self._status_message(f"config invalid: {exc}"))
 
     def _on_leader_elected(self, event: ops.LeaderElectedEvent) -> None:
         """Reconcile config after a leadership change."""
@@ -229,48 +236,64 @@ class AlloySubCharm(ops.CharmBase):
         are reconciled immediately without assuming defer support.
         """
         try:
-            configured = self._configure()
-            if configured and alloy.is_active():
-                self.unit.status = ops.ActiveStatus("Alloy config updated")
+            self._configure(active_message="Alloy config updated")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Relation-driven config update failed: %s", exc)
+            self.unit.status = ops.BlockedStatus(self._status_message(f"config invalid: {exc}"))
             if defer_on_failure:
                 event.defer()
 
-    def _configure(self) -> bool:
+    def _configure(self, *, active_message: str) -> bool:
         """Render, validate, and apply Alloy config from relation data."""
         principal_context = self._principal_context()
+        if principal_context is None:
+            self._reset_config_for_missing_relations()
+            self.unit.status = ops.WaitingStatus(
+                self._status_message("config waiting for juju-info relation")
+            )
+            return False
+        if not self._has_machine_observability_relation():
+            self._reset_config_for_missing_relations()
+            self.unit.status = ops.WaitingStatus(
+                self._status_message("config waiting for machine-observability relation")
+            )
+            return False
+
+        payload = self._observability_payload()
         loki_endpoints = self._loki_endpoint_urls()
         remote_write_endpoints = self._remote_write_endpoint_urls()
-        missing_relations = self._missing_relation_requirements(
+        logs_declared = self._logs_declared(payload)
+        metrics_declared = bool(payload.metrics_endpoints)
+        logs_enabled = logs_declared and bool(loki_endpoints)
+        metrics_enabled = metrics_declared and bool(remote_write_endpoints)
+        waiting_requirements = self._missing_relation_requirements(
             principal_context=principal_context,
+            payload=payload,
             loki_endpoints=loki_endpoints,
             remote_write_endpoints=remote_write_endpoints,
         )
-
-        if missing_relations:
-            self._reset_config_for_missing_relations()
-            self.unit.status = ops.WaitingStatus(self._relation_waiting_message(missing_relations))
-            return False
-
-        assert principal_context is not None
-        payload = self._observability_payload()
         logger.info("Configuring Alloy with principal context: %s and payload: %s", principal_context, payload)
 
         builder = ConfigBuilder(
-            loki_endpoints=loki_endpoints,
-            remote_write_endpoints=remote_write_endpoints,
-            metrics_scrape_jobs=self._active_metrics_scrape_jobs(payload, principal_context),
-            systemd_units=payload.systemd_units,
-            journal_match_expressions=payload.journal_match_expressions,
-            file_log_sources=[
-                BuilderFileLogSource(
-                    include=source.include,
-                    exclude=merge_file_excludes(source.exclude, self._path_exclude_patterns()),
-                    attributes=source.attributes,
-                )
-                for source in payload.log_files
-            ],
+            loki_endpoints=loki_endpoints if logs_enabled else [],
+            remote_write_endpoints=remote_write_endpoints if metrics_enabled else [],
+            metrics_scrape_jobs=(
+                self._active_metrics_scrape_jobs(payload, principal_context) if metrics_enabled else []
+            ),
+            systemd_units=payload.systemd_units if logs_enabled else [],
+            journal_match_expressions=payload.journal_match_expressions if logs_enabled else [],
+            file_log_sources=(
+                [
+                    BuilderFileLogSource(
+                        include=source.include,
+                        exclude=merge_file_excludes(source.exclude, self._path_exclude_patterns()),
+                        attributes=source.attributes,
+                    )
+                    for source in payload.log_files
+                ]
+                if logs_enabled
+                else []
+            ),
             topology_labels=principal_context.juju_labels(charm_name=payload.charm_name),
             global_scrape_interval=self._global_scrape_interval(),
             global_scrape_timeout=self._global_scrape_timeout(),
@@ -288,39 +311,66 @@ class AlloySubCharm(ops.CharmBase):
         alloy.write_custom_args(desired_custom_args)
         self._stored.last_good_config = config_text
         self._stored.last_custom_args = desired_custom_args
-        if alloy.is_active():
+        if alloy.is_active() or waiting_requirements:
+            if alloy.is_active():
+                self._apply_runtime_update(
+                    desired_custom_args=desired_custom_args,
+                    previous_custom_args=previous_custom_args,
+                )
+        else:
             self._apply_runtime_update(
                 desired_custom_args=desired_custom_args,
                 previous_custom_args=previous_custom_args,
             )
+        if waiting_requirements:
+            self.unit.status = ops.WaitingStatus(
+                self._status_message(self._relation_waiting_message(waiting_requirements))
+            )
+            return False
+        self.unit.status = ops.ActiveStatus(self._status_message(f"config valid; {active_message}"))
         return True
+
+    @staticmethod
+    def _logs_declared(payload: MachineObservabilityPayload) -> bool:
+        """Return whether the principal has declared any log sources."""
+        return bool(
+            payload.systemd_units or payload.journal_match_expressions or payload.log_files
+        )
 
     @staticmethod
     def _relation_waiting_message(missing_relations: list[str]) -> str:
         """Render a waiting message for the currently missing relation requirements."""
-        parts = [
-            requirement if requirement.startswith("one of ") else f"{requirement} relation"
-            for requirement in missing_relations
-        ]
-        if len(parts) == 1:
-            return f"Waiting for {parts[0]}"
-        return f"Waiting for {', '.join(parts[:-1])}, and {parts[-1]}"
+        if len(missing_relations) == 1:
+            return f"config valid; waiting for {missing_relations[0]}"
+        return f"config valid; waiting for {' and '.join(missing_relations)}"
+
+    def _status_message(self, config_status: str) -> str:
+        """Render a status message including workload and config state."""
+        service_state = "service running" if alloy.is_active() else "service down"
+        return f"Alloy {service_state}; {config_status}"
 
     def _missing_relation_requirements(
         self,
         *,
         principal_context: PrincipalContext | None,
+        payload: MachineObservabilityPayload | None = None,
         loki_endpoints: list[str],
         remote_write_endpoints: list[str],
     ) -> list[str]:
         """Return required relation inputs that are still missing."""
         missing_relations: list[str] = []
         if principal_context is None:
-            missing_relations.append("juju-info")
+            missing_relations.append("juju-info relation")
         if not self._has_machine_observability_relation():
-            missing_relations.append("machine-observability")
-        if not (loki_endpoints or remote_write_endpoints):
-            missing_relations.append("one of send-loki-logs or send-remote-write relations")
+            missing_relations.append("machine-observability relation")
+        if payload is None:
+            return missing_relations
+        if self._logs_declared(payload) and not loki_endpoints:
+            missing_relations.append("send-loki-logs relation for declared log sources")
+        if payload.metrics_endpoints and not remote_write_endpoints:
+            missing_relations.append(
+                "send-remote-write relation for declared metrics endpoints"
+            )
         return missing_relations
 
     def _reset_config_for_missing_relations(self) -> None:
