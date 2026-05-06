@@ -22,12 +22,20 @@ REMOTE_WRITE_URL = "http://mimir:9009/api/v1/push"
 
 
 def _machine_observability_payload(
-    *, metrics_endpoints=None, systemd_units=None, journal_match_expressions=None, log_files=None
+    *,
+    schema_version=1,
+    charm_name="polkadot",
+    source_topology=None,
+    metrics_endpoints=None,
+    systemd_units=None,
+    journal_match_expressions=None,
+    log_files=None,
 ):
     return json.dumps(
         {
-            "schema_version": 1,
-            "charm_name": "polkadot",
+            "schema_version": schema_version,
+            "charm_name": charm_name,
+            **({"source_topology": source_topology} if source_topology is not None else {}),
             "systemd_units": systemd_units or [],
             "journal_match_expressions": journal_match_expressions or [],
             "log_files": log_files or [],
@@ -91,6 +99,68 @@ def test_start_becomes_active_when_required_relations_present():
 
     assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
     assert state_out.workload_version == "1.0.0"
+
+
+def test_start_becomes_active_with_v2_machine_observability_payload():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="dwellir-observability-reference",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.6"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="dwellir-observability-reference",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        schema_version=2,
+                        charm_name="dwellir-observability-reference",
+                        source_topology={
+                            "model": "alloy-sub-e2e-20260419",
+                            "model_uuid": "uuid-1",
+                            "application": "dwellir-observability-reference",
+                            "unit": "dwellir-observability-reference/0",
+                            "charm_name": "dwellir-observability-reference",
+                        },
+                        systemd_units=["dwellir-observability-reference.service"],
+                        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}],
+                    )
+                },
+            ),
+            testing.Relation(
+                "send-loki-logs",
+                remote_app_name="loki",
+                remote_app_data={"url": LOKI_URL},
+            ),
+            testing.Relation(
+                "send-remote-write",
+                remote_app_name="mimir",
+                remote_app_data={"remote_write": json.dumps({"url": REMOTE_WRITE_URL})},
+            ),
+        ]
+    )
+
+    with (
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
+        builder_cls.return_value.build.return_value = ""
+        state_out = ctx.run(ctx.on.start(), state)
+
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
 
 
 def test_update_status_restarts_alloy_when_service_is_down_but_config_is_valid():

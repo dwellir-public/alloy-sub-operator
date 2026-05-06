@@ -13,7 +13,19 @@ To properly integrate with the principal, it consumes `machine-observability` de
 - systemd unit logs
 - file log sources
 - metrics endpoints
-- optional workload labels
+- optional `charm_name`
+- optional `source_topology`
+
+`alloy-sub` is now compatible with both:
+
+- v1 `machine_observability` payloads, where topology is derived from the attached
+  `juju-info` principal relation
+- v2 payloads, where the provider also publishes explicit `source_topology`
+
+In subordinate mode, `alloy-sub` still treats `juju-info` as the source of
+truth for the attached principal unit. The v2 `source_topology` block is
+accepted for forward compatibility with providers that are also intended to
+work with `alloy-vm`.
 
 ## Relation Flows
 
@@ -119,3 +131,20 @@ Deploy the subordinate and principal, relate both relation endpoints, then inspe
 - declared file log globs render `local.file_match` and `loki.source.file`
 - declared metrics jobs render `prometheus.scrape` blocks
 - outbound Loki and remote-write endpoints are included when related
+
+## v2 Compatibility Check
+
+In the local model `alloy-sub-e2e-20260419`, `alloy-sub` has been validated
+against both:
+
+- `polkadot` publishing the existing v1 payload
+- `dwellir-observability-reference` publishing the v2 payload with
+  `source_topology`
+
+The expected result after refreshing the charm is:
+
+- the existing `alloy-sub` unit attached to `polkadot` remains `active`
+- the dedicated `alloy-sub-reference` unit attached to
+  `dwellir-observability-reference` also becomes `active`
+- both units render principal-specific metrics and log pipelines from their
+  respective payloads

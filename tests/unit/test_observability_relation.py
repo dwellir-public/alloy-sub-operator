@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 from charms.dwellir_observability.v0.machine_observability import (
     MachineObservabilityPayload,
     MachineObservabilityProvider,
+    SourceTopology,
     build_machine_observability_payload,
     load_machine_observability_payload,
 )
@@ -90,17 +91,46 @@ def test_machine_observability_payload_rejects_legacy_keys():
         )
 
 
-def test_machine_observability_payload_rejects_unsupported_schema_version():
-    with pytest.raises(ValidationError):
-        MachineObservabilityPayload.model_validate(
-            {
-                "schema_version": 2,
-                "systemd_units": ["snap.polkadot.polkadot.service"],
-                "metrics_endpoints": [],
-                "journal_match_expressions": [],
-                "log_files": [],
-            }
-        )
+def test_machine_observability_payload_accepts_v2_with_source_topology():
+    payload = MachineObservabilityPayload.model_validate(
+        {
+            "schema_version": 2,
+            "charm_name": "dwellir-observability-reference",
+            "source_topology": {
+                "model": "alloy-sub-e2e-20260419",
+                "model_uuid": "uuid-1",
+                "application": "dwellir-observability-reference",
+                "unit": "dwellir-observability-reference/0",
+                "charm_name": "dwellir-observability-reference",
+            },
+            "systemd_units": ["dwellir-observability-reference.service"],
+            "metrics_endpoints": [],
+            "journal_match_expressions": [],
+            "log_files": [],
+        }
+    )
+
+    assert payload.schema_version == 2
+    assert payload.source_topology is not None
+    assert payload.source_topology.application == "dwellir-observability-reference"
+
+
+def test_build_machine_observability_payload_returns_v2_when_source_topology_provided():
+    payload = build_machine_observability_payload(
+        service_name="dwellir-observability-reference.service",
+        charm_name="dwellir-observability-reference",
+        source_topology=SourceTopology(
+            model="alloy-sub-e2e-20260419",
+            model_uuid="uuid-1",
+            application="dwellir-observability-reference",
+            unit="dwellir-observability-reference/0",
+            charm_name="dwellir-observability-reference",
+        ),
+    )
+
+    assert payload.schema_version == 2
+    assert payload.source_topology is not None
+    assert payload.source_topology.unit == "dwellir-observability-reference/0"
 
 
 def test_load_machine_observability_payload_reads_remote_app_payload():

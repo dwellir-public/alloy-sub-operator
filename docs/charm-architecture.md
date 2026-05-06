@@ -23,11 +23,16 @@ and consumes generic workload source declarations from the principal over
 
 ## Migration Notes
 
-- principal charms declare sources, not workload identity
+- principal charms declare sources, not workload identity, in v1
+- v2 providers may additionally publish `source_topology`
 - `alloy-sub` derives `juju_model`, `juju_model_uuid`, `juju_application`, and
   `juju_unit` from the attached principal relation
 - `juju_charm` is optional metadata from the principal payload, not required for
   the core contract
+- `alloy-sub` accepts both schema versions and remains backward-compatible with
+  existing v1 providers such as `polkadot`
+- in subordinate mode, `source_topology` is accepted but not required for label
+  derivation; `juju-info` remains the authoritative attachment context
 - for `send-remote-write`, `alloy-sub` consumes the standard shared
   `prometheus_remote_write` URL contract only
 - partitioning in the shared observability deployment is done through metric
