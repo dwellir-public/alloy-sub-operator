@@ -21,12 +21,94 @@ To properly integrate with the principal, it consumes `machine-observability` de
 - `machine-observability`: neutral observability declarations from the principal
 - `send-loki-logs`: outbound Loki forwarding
 - `send-remote-write`: outbound metrics forwarding
+- `grafana-cloud-config`: outbound Grafana Cloud endpoints and credentials
 
 For the shared observability deployment, `send-remote-write` uses the plain
 `prometheus_remote_write` URL contract. `alloy-sub` does not publish tenant
 identity or tenant metadata on that relation. Shared Mimir partitioning is done
 through metric labels such as Juju topology rather than tenant-specific
 remote-write extensions.
+
+## Grafana Cloud Integrator
+
+`alloy-sub` can consume Grafana Cloud endpoints and credentials from
+`grafana-cloud-integrator` over:
+
+- endpoint name: `grafana-cloud-config`
+- interface name: `grafana_cloud_config`
+
+This relation lets the subordinate render authenticated Grafana Cloud sinks for:
+
+- metrics through `prometheus.remote_write`
+- logs through `loki.write`
+
+The relation is additive. If the subordinate is also related to:
+
+- `send-remote-write`
+- `send-loki-logs`
+
+then Alloy renders dual upstream forwarding and sends to both the plain
+relation-provided endpoints and the Grafana Cloud endpoints.
+
+### Credential behavior
+
+`alloy-sub` supports both:
+
+- legacy shared `username` and `password`
+- signal-specific credentials from the relation, such as:
+  - `prometheus_username` / `prometheus_password`
+  - `loki_username` / `loki_password`
+
+Signal-specific credentials are used when present, which is required for
+Grafana Cloud environments where Prometheus and Loki use different instance IDs
+or tokens.
+
+### Connectivity checks
+
+During `update-status`, `alloy-sub` probes the Grafana Cloud metrics and logs
+endpoints from the relation. If a probe fails, the unit goes blocked with a
+message such as:
+
+- `Grafana Cloud metrics connectivity failed: ...`
+- `Grafana Cloud logs connectivity failed: ...`
+
+### Example deployment
+
+Deploy and configure `grafana-cloud-integrator`:
+
+```bash
+juju deploy grafana-cloud-integrator
+juju config grafana-cloud-integrator prometheus-url="https://prometheus-prod-39-prod-eu-north-0.grafana.net/api/prom/push"
+juju config grafana-cloud-integrator loki-url="https://logs-prod-025.grafana.net/loki/api/v1/push"
+juju config grafana-cloud-integrator signal-credentials='
+prometheus:
+  username: "1076854"
+  password: "<prometheus-token>"
+loki:
+  username: "639149"
+  password: "<loki-token>"
+'
+```
+
+Relate it to the subordinate:
+
+```bash
+juju relate alloy-sub:grafana-cloud-config grafana-cloud-integrator:grafana-cloud-config
+```
+
+Verify the rendered config on the principal machine where the subordinate is
+attached:
+
+```bash
+juju ssh <principal-unit> 'grep -n "prometheus.remote_write \\\"metrics\\\"" -A20 /etc/alloy/config.alloy'
+juju ssh <principal-unit> 'grep -n "loki.write \\\"main\\\"" -A20 /etc/alloy/config.alloy'
+```
+
+Expected result:
+
+- the Grafana Cloud Prometheus endpoint is rendered with `basic_auth`
+- the Grafana Cloud Loki endpoint is rendered with `basic_auth`
+- if plain upstream relations also exist, Alloy renders both sets of endpoints
 
 ## Validation Flow
 
