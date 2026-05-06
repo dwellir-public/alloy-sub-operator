@@ -20,6 +20,9 @@ try:
         MachineObservabilityPayload,
         MetricsEndpoint,
     )
+    from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
+        GrafanaCloudConfigRequirer,
+    )
 
     from . import alloy
     from .config_builder import (
@@ -34,12 +37,17 @@ try:
         MetricsScrapeJob as BuilderMetricsScrapeJob,
     )
     from .custom_args import build_effective_custom_args
+    from .grafanacloud_connectivity import probe_endpoint
+    from .outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from .principal_context import PrincipalContext
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
         MachineObservabilityConsumer,
         MachineObservabilityPayload,
         MetricsEndpoint,
+    )
+    from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
+        GrafanaCloudConfigRequirer,
     )
 
     import alloy
@@ -55,6 +63,8 @@ except ImportError:
         MetricsScrapeJob as BuilderMetricsScrapeJob,
     )
     from custom_args import build_effective_custom_args
+    from grafanacloud_connectivity import probe_endpoint
+    from outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from principal_context import PrincipalContext
 
 logger = logging.getLogger(__name__)
@@ -155,6 +165,7 @@ class AlloySubCharm(ops.CharmBase):
         super().__init__(framework)
         self._stored.set_default(last_good_config="", last_custom_args="")
         self.machine_observability_consumer = MachineObservabilityConsumer(self)
+        self.grafana_cloud = GrafanaCloudConfigRequirer(self)
 
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.start, self._on_start)
@@ -167,7 +178,12 @@ class AlloySubCharm(ops.CharmBase):
         self.framework.observe(self.on.juju_info_relation_changed, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_broken, self._on_relation_event)
 
-        for relation_name in ("machine-observability", "send-loki-logs", "send-remote-write"):
+        for relation_name in (
+            "machine-observability",
+            "send-loki-logs",
+            "send-remote-write",
+            "grafana-cloud-config",
+        ):
             for event in ("relation_joined", "relation_changed", "relation_broken"):
                 self.framework.observe(getattr(self.on[relation_name], event), self._on_relation_event)
 
@@ -213,7 +229,11 @@ class AlloySubCharm(ops.CharmBase):
             version = alloy.get_version()
             if version:
                 self.unit.set_workload_version(version)
-            self._configure(active_message="Alloy config updated")
+            configured = self._configure(active_message="Alloy config updated")
+            if configured:
+                connectivity_error = self._grafana_cloud_status_error()
+                if connectivity_error is not None:
+                    self.unit.status = ops.BlockedStatus(self._status_message(connectivity_error))
         except Exception as exc:  # noqa: BLE001
             self.unit.status = ops.BlockedStatus(self._status_message(f"config invalid: {exc}"))
 
@@ -248,9 +268,7 @@ class AlloySubCharm(ops.CharmBase):
         principal_context = self._principal_context()
         if principal_context is None:
             self._reset_config_for_missing_relations()
-            self.unit.status = ops.WaitingStatus(
-                self._status_message("config waiting for juju-info relation")
-            )
+            self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
             return False
         if not self._has_machine_observability_relation():
             self._reset_config_for_missing_relations()
@@ -320,9 +338,7 @@ class AlloySubCharm(ops.CharmBase):
     @staticmethod
     def _logs_declared(payload: MachineObservabilityPayload) -> bool:
         """Return whether the principal has declared any log sources."""
-        return bool(
-            payload.systemd_units or payload.journal_match_expressions or payload.log_files
-        )
+        return bool(payload.systemd_units or payload.journal_match_expressions or payload.log_files)
 
     @staticmethod
     def _relation_waiting_message(missing_relations: list[str]) -> str:
@@ -416,21 +432,57 @@ class AlloySubCharm(ops.CharmBase):
         """Return the desired Alloy service args."""
         return build_effective_custom_args(str(self.config.get("custom-args", "")))
 
-    def _loki_endpoint_urls(self) -> list[str]:
-        """Return outbound Loki endpoint URLs from related apps."""
-        return relation_urls(
-            self.model.relations.get("send-loki-logs", []),
-            direct_keys=("url",),
-            json_keys=("endpoint", "endpoints"),
-        )
+    def _grafana_cloud_metrics_endpoints(self) -> list[OutboundEndpoint]:
+        """Return Grafana Cloud remote-write endpoints."""
+        if not self.grafana_cloud.prometheus_ready:
+            return []
+        credentials = self.grafana_cloud.prometheus_credentials
+        return [
+            OutboundEndpoint(
+                url=self.grafana_cloud.prometheus_url,
+                username=credentials.username if credentials else "",
+                password=credentials.password if credentials else "",
+                tls_ca_pem=self.grafana_cloud.tls_ca,
+            )
+        ]
 
-    def _remote_write_endpoint_urls(self) -> list[str]:
-        """Return outbound remote-write endpoint URLs from related apps."""
-        return relation_urls(
-            self.model.relations.get("send-remote-write", []),
-            direct_keys=("url",),
-            json_keys=("remote_write", "endpoints"),
-        )
+    def _grafana_cloud_loki_endpoints(self) -> list[OutboundEndpoint]:
+        """Return Grafana Cloud Loki endpoints."""
+        if not self.grafana_cloud.loki_ready:
+            return []
+        credentials = self.grafana_cloud.loki_credentials
+        return [
+            OutboundEndpoint(
+                url=self.grafana_cloud.loki_url,
+                username=credentials.username if credentials else "",
+                password=credentials.password if credentials else "",
+                tls_ca_pem=self.grafana_cloud.tls_ca,
+            )
+        ]
+
+    def _loki_endpoint_urls(self) -> list[OutboundEndpoint]:
+        """Return outbound Loki endpoints from all configured relations."""
+        relation_endpoints = [
+            OutboundEndpoint(url=url)
+            for url in relation_urls(
+                self.model.relations.get("send-loki-logs", []),
+                direct_keys=("url",),
+                json_keys=("endpoint", "endpoints"),
+            )
+        ]
+        return dedupe_endpoints([*relation_endpoints, *self._grafana_cloud_loki_endpoints()])
+
+    def _remote_write_endpoint_urls(self) -> list[OutboundEndpoint]:
+        """Return outbound remote-write endpoints from all configured relations."""
+        relation_endpoints = [
+            OutboundEndpoint(url=url)
+            for url in relation_urls(
+                self.model.relations.get("send-remote-write", []),
+                direct_keys=("url",),
+                json_keys=("remote_write", "endpoints"),
+            )
+        ]
+        return dedupe_endpoints([*relation_endpoints, *self._grafana_cloud_metrics_endpoints()])
 
     def _active_metrics_scrape_jobs(
         self, payload: MachineObservabilityPayload, principal_context: PrincipalContext
@@ -459,6 +511,18 @@ class AlloySubCharm(ops.CharmBase):
             )
             for job in translated_jobs
         ]
+
+    def _grafana_cloud_status_error(self) -> str | None:
+        """Return the first Grafana Cloud connectivity failure, if any."""
+        for endpoint in self._grafana_cloud_metrics_endpoints():
+            ok, reason = probe_endpoint(endpoint)
+            if not ok:
+                return f"Grafana Cloud metrics connectivity failed: {reason}"
+        for endpoint in self._grafana_cloud_loki_endpoints():
+            ok, reason = probe_endpoint(endpoint)
+            if not ok:
+                return f"Grafana Cloud logs connectivity failed: {reason}"
+        return None
 
     def _path_exclude_patterns(self) -> str:
         """Return raw path exclude config for file-log translation."""

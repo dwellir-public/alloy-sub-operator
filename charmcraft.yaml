@@ -86,6 +86,9 @@ requires:
   send-remote-write:
     interface: prometheus_remote_write
     optional: true
+  grafana-cloud-config:
+    interface: grafana_cloud_config
+    optional: true
 
 parts:
   charm:

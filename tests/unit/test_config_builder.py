@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.config_builder import ConfigBuilder, FileLogSource, MetricsScrapeJob, ScrapeTarget
+from src.outbound_endpoints import OutboundEndpoint
 
 
 def test_build_renders_only_juju_labels_for_logs():
@@ -148,3 +149,72 @@ def test_build_renders_log_pipeline_without_loki_sink():
     assert 'loki.process "juju"' in config
     assert "forward_to = []" in config
     assert 'loki.write "main"' not in config
+
+
+def test_build_renders_remote_write_with_basic_auth_and_ca_pem():
+    job = MetricsScrapeJob(
+        job_name="polkadot",
+        targets=[ScrapeTarget(address="10.0.0.5:9615")],
+    )
+    builder = ConfigBuilder(
+        loki_endpoints=[],
+        remote_write_endpoints=[
+            OutboundEndpoint(
+                url="https://prometheus-prod-39-prod-eu-north-0.grafana.net/api/prom/push",
+                username="1076854",
+                password="glc_token",
+                tls_ca_pem="-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n",
+            )
+        ],
+        metrics_scrape_jobs=[job],
+        systemd_units=[],
+        journal_match_expressions=[],
+        file_log_sources=[],
+        topology_labels={},
+        global_scrape_interval="1m",
+        global_scrape_timeout="10s",
+        path_exclude=[],
+        queue_size=1000,
+        max_elapsed_time_min=5,
+        tls_insecure_skip_verify=False,
+    )
+
+    config = builder.build()
+
+    assert "basic_auth {" in config
+    assert 'username = "1076854"' in config
+    assert 'password = "glc_token"' in config
+    assert 'ca_pem = "-----BEGIN CERTIFICATE-----\\nabc\\n-----END CERTIFICATE-----\\n"' in config
+
+
+def test_build_renders_loki_write_with_basic_auth_and_ca_pem():
+    builder = ConfigBuilder(
+        loki_endpoints=[
+            OutboundEndpoint(
+                url="https://logs-prod-006.grafana.net/loki/api/v1/push",
+                username="1076854",
+                password="glc_token",
+                tls_ca_pem="-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n",
+            )
+        ],
+        remote_write_endpoints=[],
+        metrics_scrape_jobs=[],
+        systemd_units=["snap.polkadot.polkadot.service"],
+        journal_match_expressions=[],
+        file_log_sources=[],
+        topology_labels={"juju_application": "polkadot"},
+        global_scrape_interval="1m",
+        global_scrape_timeout="10s",
+        path_exclude=[],
+        queue_size=1000,
+        max_elapsed_time_min=5,
+        tls_insecure_skip_verify=False,
+    )
+
+    config = builder.build()
+
+    assert 'loki.write "main"' in config
+    assert "basic_auth {" in config
+    assert 'username = "1076854"' in config
+    assert 'password = "glc_token"' in config
+    assert 'ca_pem = "-----BEGIN CERTIFICATE-----\\nabc\\n-----END CERTIFICATE-----\\n"' in config

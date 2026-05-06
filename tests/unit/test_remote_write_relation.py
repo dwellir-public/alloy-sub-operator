@@ -11,6 +11,7 @@ from charm import AlloySubCharm
 MODEL_NAME = "polka-obs"
 MODEL_UUID = "00000000-0000-4000-8000-000000000222"
 
+
 def test_send_remote_write_relation_does_not_publish_tenant_metadata():
     harness = testing.Harness(AlloySubCharm)
     harness.set_leader(True)

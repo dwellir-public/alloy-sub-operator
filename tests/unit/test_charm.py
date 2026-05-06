@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
 from charm import AlloySubCharm, relation_urls
+from outbound_endpoints import OutboundEndpoint
 
 LOKI_URL = "http://loki:3100/loki/api/v1/push"
 REMOTE_WRITE_URL = "http://mimir:9009/api/v1/push"
@@ -88,9 +89,7 @@ def test_start_becomes_active_when_required_relations_present():
         builder_cls.return_value.build.return_value = ""
         state_out = ctx.run(ctx.on.start(), _ready_state(with_loki=True))
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy is running"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
     assert state_out.workload_version == "1.0.0"
 
 
@@ -111,9 +110,7 @@ def test_update_status_restarts_alloy_when_service_is_down_but_config_is_valid()
                 remote_app_data={
                     "payload": _machine_observability_payload(
                         systemd_units=["snap.polkadot.polkadot.service"],
-                        metrics_endpoints=[
-                            {"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}
-                        ],
+                        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}],
                     )
                 },
             ),
@@ -144,9 +141,7 @@ def test_update_status_restarts_alloy_when_service_is_down_but_config_is_valid()
         state_out = ctx.run(ctx.on.update_status(), state)
 
     restart_mock.assert_called_once()
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy config updated"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy config updated")
 
 
 def test_update_status_does_not_write_invalid_config():
@@ -165,9 +160,7 @@ def test_update_status_does_not_write_invalid_config():
                 remote_unit_id=0,
                 remote_app_data={
                     "payload": _machine_observability_payload(
-                        metrics_endpoints=[
-                            {"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}
-                        ]
+                        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
                     )
                 },
             ),
@@ -191,9 +184,7 @@ def test_update_status_does_not_write_invalid_config():
 
     write_config_mock.assert_not_called()
     write_args_mock.assert_not_called()
-    assert state_out.unit_status == testing.BlockedStatus(
-        "Alloy service running; config invalid: bad config"
-    )
+    assert state_out.unit_status == testing.BlockedStatus("Alloy service running; config invalid: bad config")
 
 
 def test_start_waits_for_required_relations_when_missing():
@@ -206,9 +197,7 @@ def test_start_waits_for_required_relations_when_missing():
     ):
         state_out = ctx.run(ctx.on.start(), testing.State())
 
-    assert state_out.unit_status == testing.WaitingStatus(
-        "Alloy service down; config waiting for juju-info relation"
-    )
+    assert state_out.unit_status == testing.WaitingStatus("Alloy service down; config waiting for juju-info relation")
 
 
 def test_start_waits_for_machine_observability_relation():
@@ -260,9 +249,7 @@ def test_start_waits_for_sink_relation():
         builder_cls.return_value.build.return_value = ""
         state_out = ctx.run(ctx.on.start(), _ready_state())
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy is running"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
 
 
 def test_start_becomes_active_for_noop_payload_without_sink_relations():
@@ -284,9 +271,7 @@ def test_start_becomes_active_for_noop_payload_without_sink_relations():
         builder_cls.return_value.build.return_value = ""
         state_out = ctx.run(ctx.on.start(), _ready_state())
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy is running"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
 
 
 def test_start_waits_for_declared_metrics_without_remote_write_sink():
@@ -305,9 +290,7 @@ def test_start_waits_for_declared_metrics_without_remote_write_sink():
                 remote_unit_id=0,
                 remote_app_data={
                     "payload": _machine_observability_payload(
-                        metrics_endpoints=[
-                            {"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}
-                        ]
+                        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
                     )
                 },
             ),
@@ -328,9 +311,7 @@ def test_start_waits_for_declared_metrics_without_remote_write_sink():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy is running"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
 
 
 def test_start_waits_for_declared_logs_without_loki_sink():
@@ -348,9 +329,7 @@ def test_start_waits_for_declared_logs_without_loki_sink():
                 remote_app_name="polkadot",
                 remote_unit_id=0,
                 remote_app_data={
-                    "payload": _machine_observability_payload(
-                        systemd_units=["snap.polkadot.polkadot.service"]
-                    )
+                    "payload": _machine_observability_payload(systemd_units=["snap.polkadot.polkadot.service"])
                 },
             ),
         ]
@@ -370,9 +349,7 @@ def test_start_waits_for_declared_logs_without_loki_sink():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy is running"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
 
 
 def test_start_waits_for_declared_logs_when_only_remote_write_sink_exists():
@@ -390,9 +367,7 @@ def test_start_waits_for_declared_logs_when_only_remote_write_sink_exists():
                 remote_app_name="polkadot",
                 remote_unit_id=0,
                 remote_app_data={
-                    "payload": _machine_observability_payload(
-                        systemd_units=["snap.polkadot.polkadot.service"]
-                    )
+                    "payload": _machine_observability_payload(systemd_units=["snap.polkadot.polkadot.service"])
                 },
             ),
             testing.Relation(
@@ -417,9 +392,7 @@ def test_start_waits_for_declared_logs_when_only_remote_write_sink_exists():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy is running"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
 
 
 def test_start_waits_for_both_declared_pipelines_when_both_sinks_are_missing():
@@ -439,9 +412,7 @@ def test_start_waits_for_both_declared_pipelines_when_both_sinks_are_missing():
                 remote_app_data={
                     "payload": _machine_observability_payload(
                         systemd_units=["snap.polkadot.polkadot.service"],
-                        metrics_endpoints=[
-                            {"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}
-                        ],
+                        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}],
                     )
                 },
             ),
@@ -462,8 +433,100 @@ def test_start_waits_for_both_declared_pipelines_when_both_sinks_are_missing():
     ):
         state_out = ctx.run(ctx.on.start(), state)
 
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; Alloy is running"
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; Alloy is running")
+
+
+def test_update_status_blocks_when_grafana_cloud_metrics_probe_fails():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload()},
+            ),
+            testing.Relation(
+                "grafana-cloud-config",
+                remote_app_name="grafana-cloud-integrator",
+                remote_app_data={
+                    "prometheus_url": "https://prometheus-prod-39-prod-eu-north-0.grafana.net/api/prom/push",
+                    "username": "1076854",
+                    "password": "glc_token",
+                },
+            ),
+        ]
+    )
+
+    with (
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.probe_endpoint", return_value=(False, "TLS handshake failed")),
+    ):
+        state_out = ctx.run(ctx.on.update_status(), state)
+
+    assert state_out.unit_status == testing.BlockedStatus(
+        "Alloy service running; Grafana Cloud metrics connectivity failed: TLS handshake failed"
+    )
+
+
+def test_update_status_blocks_when_grafana_cloud_logs_probe_fails():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload(systemd_units=["snap.polkadot.service"])},
+            ),
+            testing.Relation(
+                "grafana-cloud-config",
+                remote_app_name="grafana-cloud-integrator",
+                remote_app_data={
+                    "loki_url": "https://logs-prod-006.grafana.net/loki/api/v1/push",
+                    "username": "1076854",
+                    "password": "glc_token",
+                },
+            ),
+        ]
+    )
+
+    with (
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.probe_endpoint", return_value=(False, "http 404")),
+    ):
+        state_out = ctx.run(ctx.on.update_status(), state)
+
+    assert state_out.unit_status == testing.BlockedStatus(
+        "Alloy service running; Grafana Cloud logs connectivity failed: http 404"
     )
 
 
@@ -714,7 +777,7 @@ def test_removing_loki_relation_rewrites_config_when_remote_write_remains():
 
     assert write_config.call_count == writes_before_remove + 1
     assert builder_cls.call_args.kwargs["loki_endpoints"] == []
-    assert builder_cls.call_args.kwargs["remote_write_endpoints"] == [REMOTE_WRITE_URL]
+    assert builder_cls.call_args.kwargs["remote_write_endpoints"] == [OutboundEndpoint(url=REMOTE_WRITE_URL)]
     assert harness.model.unit.status == testing.ActiveStatus(
         "Alloy service running; config valid; Alloy config updated"
     )
