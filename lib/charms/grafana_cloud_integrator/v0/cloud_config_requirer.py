@@ -184,7 +184,6 @@ class GrafanaCloudConfigRequirer(Object):
         for relation in self._charm.model.relations.get(self._relation_name, []):
             if relation.app is None:
                 continue
-            logger.info("%s %s %s", relation, self._relation_name, relation.data[relation.app])
             return dict(relation.data[relation.app])
         return {}
 
