@@ -24,8 +24,9 @@ config:
       type: string
     systemd-service:
       description: |
-        Systemd service name of the principal charm to monitor and forward logs for. 
-        If not set, the service not forward any _SYSTEMD_UNIT systemd logs.
+        Systemd service name of the principal charm to monitor and forward logs for.
+        When the machine-observability relation is present, relation-provided
+        systemd_units take precedence for _SYSTEMD_UNIT journal log collection.
       default: ""
       type: string
     custom-args:
@@ -39,6 +40,8 @@ config:
     loki-url:
       description: |
         The URL of the Loki service to send logs to.
+        Loki endpoints provided by the send-loki-logs or grafana-cloud-config
+        relations take precedence for rendered log forwarding.
       type: string
       default: ""
     path_exclude:
@@ -49,11 +52,15 @@ config:
     global_scrape_interval:
       description: |
         Default scrape interval used when metrics jobs omit one.
+        Relation-provided scrape intervals in machine-observability metrics
+        endpoints take precedence.
       type: string
       default: "1m"
     global_scrape_timeout:
       description: |
         Default scrape timeout used when metrics jobs omit one.
+        Relation-provided scrape timeouts in machine-observability metrics
+        endpoints take precedence.
       type: string
       default: "10s"
     tls_insecure_skip_verify:
