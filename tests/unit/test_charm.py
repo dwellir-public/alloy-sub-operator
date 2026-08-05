@@ -1276,3 +1276,93 @@ def test_snap_failure_blocks_but_still_writes_config():
     write_config_mock.assert_called()
     assert state_out.unit_status.name == "blocked"
     assert "snap store unreachable" in state_out.unit_status.message
+
+
+def _run_remove_with_prior_state(prior_state):
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+        ],
+        stored_states={
+            testing.StoredState(
+                owner_path="AlloySubCharm",
+                name="_stored",
+                content={
+                    "last_good_config": "",
+                    "last_custom_args": "",
+                    "node_exporter_prior_state": prior_state,
+                },
+            )
+        },
+        leader=True,
+    )
+
+    with (
+        patch("charm.node_exporter.remove") as remove_mock,
+        patch("charm.node_exporter.enable") as enable_mock,
+        patch("charm.node_exporter.disable") as disable_mock,
+    ):
+        ctx.run(ctx.on.remove(), state)
+
+    return remove_mock, enable_mock, disable_mock
+
+
+def test_remove_removes_only_a_snap_the_charm_installed():
+    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("absent")
+
+    remove_mock.assert_called_once()
+    enable_mock.assert_not_called()
+    disable_mock.assert_not_called()
+
+
+def test_remove_redisables_a_snap_the_charm_enabled():
+    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("disabled")
+
+    disable_mock.assert_called_once()
+    remove_mock.assert_not_called()
+    enable_mock.assert_not_called()
+
+
+def test_remove_reenables_a_preexisting_running_snap():
+    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("enabled")
+
+    enable_mock.assert_called_once()
+    remove_mock.assert_not_called()
+    disable_mock.assert_not_called()
+
+
+def test_remove_touches_nothing_when_never_opted_in():
+    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("")
+
+    remove_mock.assert_not_called()
+    enable_mock.assert_not_called()
+    disable_mock.assert_not_called()
+
+
+def test_remove_does_not_raise_when_teardown_fails():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        stored_states={
+            testing.StoredState(
+                owner_path="AlloySubCharm",
+                name="_stored",
+                content={
+                    "last_good_config": "",
+                    "last_custom_args": "",
+                    "node_exporter_prior_state": "absent",
+                },
+            )
+        },
+        leader=True,
+    )
+
+    with patch("charm.node_exporter.remove", side_effect=RuntimeError("snapd is down")) as remove_mock:
+        ctx.run(ctx.on.remove(), state)
+
+    remove_mock.assert_called_once()

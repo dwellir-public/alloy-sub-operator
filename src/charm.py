@@ -171,6 +171,7 @@ class AlloySubCharm(ops.CharmBase):
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.on.stop, self._on_stop)
+        self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.update_status, self._on_update_status)
         self.framework.observe(self.on.leader_elected, self._on_leader_elected)
@@ -215,6 +216,13 @@ class AlloySubCharm(ops.CharmBase):
         """Stop the workload."""
         alloy.stop()
         self.unit.status = ops.ActiveStatus("Alloy stopped")
+
+    def _on_remove(self, _: ops.RemoveEvent) -> None:
+        """Restore the snap state the charm originally found before the unit goes away."""
+        try:
+            node_exporter.apply(node_exporter.plan_teardown(prior_state=self._stored.node_exporter_prior_state))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("node-exporter teardown failed: %s", exc)
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent) -> None:
         """Rewrite and apply config after charm config changes."""
