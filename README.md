@@ -147,6 +147,12 @@ Two rules govern what the charm will touch:
    directions.** Setting it back to `false` disables the snap, even if the snap
    was already running before the charm arrived.
 
+Each reconcile reads the snap's actual state and converges toward the config, so
+`true` → `false` → `true` leaves the snap enabled, and a failed install is
+retried on the next hook. When snapd cannot be read at all — a fresh machine
+still seeding, for example — the charm takes no snap action and renders no
+node-exporter scrape job, and tries again on the next hook.
+
 On unit removal the charm restores exactly what it first found: a snap it
 installed is removed, a snap it enabled is disabled again, and a snap that was
 already running is left running.

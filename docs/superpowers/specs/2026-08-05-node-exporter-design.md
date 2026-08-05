@@ -139,10 +139,12 @@ def get_version() -> str | None
 ```
 
 `connect_interfaces()` runs on fresh install *and* on enable-of-existing, so a pre-existing
-install also gets its interfaces wired. `snap connect` on an already-connected interface is a
-no-op. A single failed connect logs a warning and continues to the next interface — partial
-metrics beat no metrics, and a missing interface on an older snap revision must not block the
-charm.
+install also gets its interfaces wired, plus once on first opt-in when the snap is already
+running. It does **not** run on every subsequent reconcile: `snap connect` on an already-
+connected interface is a no-op, but four no-op subprocess calls on every `update-status` for the
+life of the unit are pure noise. A single failed connect logs a warning and continues to the
+next interface — partial metrics beat no metrics, and a missing interface on an older snap
+revision must not block the charm.
 
 #### Layer 2 — the decision, as pure functions
 
@@ -151,6 +153,7 @@ charm.
 class SnapState:
     installed: bool
     enabled: bool
+    known: bool = True   # False when snapd could not be read at all
 
 @dataclass(frozen=True)
 class Plan:
@@ -253,26 +256,61 @@ def _reconcile_node_exporter(self) -> tuple[bool, str | None]:
 restore point still reflects what was on the machine, so teardown does the right thing rather
 than reading `""` and walking away.
 
+**Every action is derived from observed reality, never from `prior_state` alone.** `snap enable`
+and `snap disable` are not idempotent — both exit non-zero when the snap is already in the
+requested state — so emitting an action the machine does not need is an error, not a harmless
+no-op. `prior_state` answers only two questions: has consent been given (rule 1), and what must
+be restored at teardown. It never answers "what is on the machine right now"; `observe()` does.
+
+`observe()` is therefore three-valued. Only a `CalledProcessError` whose combined stdout+stderr
+contains snapd's `no matching snaps installed` means the snap is genuinely absent. Every other
+failure — any other `CalledProcessError` (`cannot communicate with server` while snapd is still
+seeding, for instance), `FileNotFoundError`, `TimeoutExpired` — yields `known=False`: the state
+is *unknown*, which is not the same as absent and must never be acted on as if it were.
+
 The resulting behaviour, returned as `(scrape_enabled, error)`:
 
-| prior state | config `true` | config `false` |
-|---|---|---|
-| `""` — never opted in | record prior state, then act per the row it lands on | **nothing** |
-| `absent` — we installed it | `connect_interfaces()` | `disable()` |
-| `disabled` — we enabled it | `connect_interfaces()` | `disable()` |
-| `enabled` — already running | `connect_interfaces()` | `disable()` |
+| prior state | observed | config `true` | config `false` |
+|---|---|---|---|
+| `""` — never opted in | *not read* | — | **nothing**, `observe` is never called |
+| `""` — never opted in | unknown | record `enabled`, no action, no scrape job | — |
+| `""` — never opted in | absent | record `absent`, `install` + `connect` | — |
+| `""` — never opted in | installed, disabled | record `disabled`, `enable` + `connect` | — |
+| `""` — never opted in | installed, enabled | record `enabled`, `connect` | — |
+| any of `absent` / `disabled` / `enabled` | unknown | nothing, no scrape job; retry next hook | nothing; retry next hook |
+| any of `absent` / `disabled` / `enabled` | absent | `install` + `connect` | nothing |
+| any of `absent` / `disabled` / `enabled` | installed, disabled | `enable` + `connect` | nothing |
+| any of `absent` / `disabled` / `enabled` | installed, enabled | nothing | `disable` |
 
-Recording plus first action, for the `""` row: `absent` → `install()` then
-`connect_interfaces()`; `disabled` → `enable()` then `connect_interfaces()`; `enabled` →
-`connect_interfaces()` only.
+On the `true` path `prior_state` is recorded on first opt-in and never rewritten afterwards; on
+the `false` path it is carried through untouched. The three non-empty values behave identically
+for config purposes and diverge only at teardown, which is the sole reason the distinction is
+stored at all.
 
-After opt-in the three non-empty rows behave identically for config purposes. They diverge only
-at teardown, which is the sole reason the distinction is stored at all.
+Three consequences worth naming, because each is a bug the earlier intent-driven matrix had:
+
+- **`false` on an already-disabled or absent snap issues nothing.** Re-running `snap disable`
+  against a disabled snap exits non-zero, which under the old matrix parked the unit in Blocked
+  on every `update-status` forever.
+- **`true` re-converges.** `true` → `false` → `true` ends with the snap *enabled*: the third
+  step observes a disabled snap and emits `("enable", "connect")`. A failed install is likewise
+  retried on the next hook rather than being assumed done.
+- **`connect` is not re-run forever.** Interfaces are wired on first opt-in and whenever the
+  charm installs or enables the snap. `snap connect` on an already-connected interface is a
+  no-op, but running four of them on every `update-status` for the life of the unit buys
+  nothing, so a steady-state reconcile of an installed-and-enabled snap emits `()`.
+
+An unknown observation is always the do-nothing branch, and on first opt-in it records
+`PRIOR_STATE_ENABLED` — the one restore point that can never lead to `snap remove --purge`. A
+transient snapd failure must not be able to convert a foreign, pre-existing snap into something
+the charm believes it installed.
 
 Rule 1 matters because the default is `false`. Under an unconditional "disable if installed"
 rule, merely deploying `alloy-sub` onto a machine already running node-exporter for another
 consumer would disable it before the operator touched any config. The `""` row makes a
-default-config deployment a genuine no-op.
+default-config deployment a genuine no-op, and it is literal: with `prior_state == ""` and
+`enabled=False` the planner returns before calling `observe`, so not even a read-only
+`snap list` is issued.
 
 Rule 2 matters because the alternative — the charm only ever undoing its own changes — makes
 `enable-node-exporter=false` a permanent no-op on any machine where node-exporter happened to
@@ -285,7 +323,10 @@ regardless of relation state.
 
 On snap failure it returns the error message and `scrape_enabled=False`. `_configure()` then
 skips only the node-exporter job, renders and applies the rest of the config normally, and sets
-`BlockedStatus` at the end. A broken snap must not take down log forwarding.
+`BlockedStatus` at the end. A broken snap must not take down log forwarding. Because the
+reconcile runs before the topology gate, the error is also carried into that early return: a
+snap failure with no topology available reports the snap error as Blocked rather than a
+`WaitingStatus` that hides it.
 
 ### Section 4: scrape job
 
@@ -317,8 +358,12 @@ endpoint exists, and already sanitizes `node-exporter` to the component name `no
 principal_context = self._principal_context()
 if principal_context is None:
     self._reset_config_for_missing_relations()
-    self.unit.status = ops.WaitingStatus(self._status_message(
-        "config waiting for juju-info relation or machine-observability source_topology"))
+    if node_exporter_error is not None:
+        self.unit.status = ops.BlockedStatus(self._status_message(
+            f"node-exporter: {node_exporter_error}"))
+    else:
+        self.unit.status = ops.WaitingStatus(self._status_message(
+            "config waiting for juju-info relation or machine-observability source_topology"))
     return False
 
 if not self._has_machine_observability_relation() and not self._node_exporter_enabled():
@@ -412,9 +457,20 @@ Rule 2, config governs after opt-in — all three record-and-act paths, then the
   records `disabled`.
 - `enabled=True`, `prior_state=""`, observed installed+enabled → `("connect",)`, records
   `enabled`.
-- `enabled=True` with any non-empty `prior_state` → `("connect",)`, `prior_state` unchanged.
-- `enabled=False` with `prior_state` in `absent` / `disabled` / `enabled` → `("disable",)` in
-  all three cases, never `("remove",)`.
+- `enabled=True` with any non-empty `prior_state`, observed absent → `("install", "connect")`;
+  observed installed+disabled → `("enable", "connect")`; observed installed+enabled → `()`.
+  `prior_state` unchanged in every case.
+- `enabled=False` with `prior_state` in `absent` / `disabled` / `enabled`, observed
+  installed+enabled → `("disable",)` in all three cases, never `("remove",)`; observed
+  installed+disabled or absent → `()`.
+
+Unknown machine state — the branch that must never guess:
+
+- `observe()` returns `known=False` on first opt-in → no actions, records
+  `PRIOR_STATE_ENABLED`, `scrape_enabled is False`.
+- `plan_teardown` after that path → `("enable",)`, never `("remove",)`.
+- `known=False` after opt-in, on either the `true` or the `false` path → no actions,
+  `prior_state` unchanged.
 
 Teardown, full restore — the only place the three values diverge:
 
@@ -422,9 +478,15 @@ Teardown, full restore — the only place the three values diverge:
 - `disabled` → `("disable",)`
 - `enabled` → `("enable",)`, not `("remove",)` and not empty
 
-Sequence test, the case that drove the design — pre-installed and running, then `false` → `true`
-→ `false` → teardown, threading `prior_state` through each step. Asserted action tuples: `()`,
-`("connect",)`, `("disable",)`, `("enable",)`. The machine ends where it started.
+Sequence tests, threading `prior_state` (and, where it matters, the machine's actual state)
+through each step:
+
+- Pre-installed and running, then `false` → `true` → `false` → teardown. Asserted action tuples:
+  `()`, `("connect",)`, `("disable",)`, `("enable",)`. The machine ends where it started.
+- `true` → `false` → `true` against a machine whose state actually changes: `("connect",)`,
+  `("disable",)`, `("enable", "connect")`. The snap ends **enabled**, not left disabled.
+- Two consecutive reconciles with unchanged config emit the action once and then `()` — both for
+  `false` after a successful disable and for `true` on an installed+enabled snap.
 
 `scrape_job()` returns `localhost:9100`, job name `node-exporter`, path `/metrics`, and the
 topology labels it was handed.
@@ -433,8 +495,11 @@ topology labels it was handed.
 
 - Each of `install` / `enable` / `disable` / `remove` / `connect_interfaces` builds the expected
   argv.
-- `observe()` parses real `snap list` output into `SnapState`, including the `disabled` note and
-  the not-installed case.
+- `observe()` parses real `snap list` output into `SnapState`, including the `disabled` note, the
+  genuinely-not-installed case (snapd's `no matching snaps installed`), and the three unknown
+  cases — any other non-zero exit, a missing `snap` binary, and a timeout — which yield
+  `known=False`.
+- A failed snap command's exception message carries snapd's own stderr, not just the exit status.
 - `connect_interfaces` attempts all four interfaces and continues past one failure.
 - `get_version` parses real `snap list` output and returns `None` when the snap is absent.
 - `apply()` dispatches each action name to the matching effect, in order.
@@ -445,6 +510,9 @@ topology labels it was handed.
 - `_reconcile_node_exporter` persists `plan.prior_state` into `StoredState`, and persists it
   even when `apply` raises.
 - Snap failure → Blocked, but the rest of the config is still written.
+- Snap failure with no topology available → Blocked on the snap error, not Waiting.
+- Enabled, then set back to `false` → the `node-exporter` job is dropped from
+  `metrics_scrape_jobs` and the unit is Active, not Blocked.
 - `on.remove` calls `apply(plan_teardown(...))` with the stored `prior_state`.
 - `juju-info` only, no `machine-observability`, enabled → Active.
 - No `juju-info`, v2 payload with `source_topology` → Active with topology labels from the
@@ -490,10 +558,19 @@ slice; the snap path needs a real machine and is verified manually per the READM
   but it means `true` → `false` is not the same as never having enabled it. An operator who
   wants the charm to stop managing an existing snap entirely must remove the unit, which
   triggers the full restore.
-- **Prior state is recorded once, not continuously.** If an operator manually disables the snap
-  while the charm has it enabled, the charm re-enables it on the next reconcile. That is
-  intended — config is the declared intent — but it means `snap disable` by hand is not a
-  durable override. Setting `enable-node-exporter=false` is.
+- **Prior state is recorded once; machine state is read every time.** `prior_state` is written
+  on first opt-in and never rewritten, but every reconcile re-reads the machine and acts on what
+  it finds. So if an operator manually disables the snap while the charm has it enabled, the
+  charm re-enables it on the next reconcile. That is intended — config is the declared intent —
+  but it means `snap disable` by hand is not a durable override. Setting
+  `enable-node-exporter=false` is.
+- **Unreadable snapd stalls rather than guesses.** While `snap list` cannot be run at all — snapd
+  still seeding on a fresh machine is the common case — the reconcile takes no action and
+  renders no node-exporter scrape job, retrying on the next hook. The unit is Active without
+  node-exporter metrics rather than Blocked, so a long-lived snapd outage is quieter than it
+  might be. The alternative, treating an unreadable snapd as "absent", is what would let a
+  transient failure record `absent` for a foreign snap and remove it at teardown; stalling is
+  the safe direction.
 - **Port collision.** Something already bound to 9100 would make the snap fail to start; Alloy
   would then scrape a dead target and surface it as a scrape failure rather than a charm error.
   Not worth guarding in this slice.

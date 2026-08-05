@@ -1107,7 +1107,7 @@ def test_reconcile_node_exporter_persists_prior_state_before_applying():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False)),
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False, known=True)),
         patch("charm.node_exporter.apply") as apply_mock,
     ):
         scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
@@ -1125,7 +1125,7 @@ def test_reconcile_node_exporter_records_prior_state_even_when_apply_fails():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False)),
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False, known=True)),
         patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
     ):
         scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
@@ -1176,7 +1176,7 @@ def test_node_exporter_job_is_rendered_with_topology_labels():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True)),
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True, known=True)),
         patch("charm.node_exporter.apply"),
         patch("charm.alloy.get_version", return_value="1.0.0"),
         patch("charm.alloy.is_active", return_value=True),
@@ -1215,7 +1215,7 @@ def test_node_exporter_only_mode_is_active_without_machine_observability():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True)),
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True, known=True)),
         patch("charm.node_exporter.apply"),
         patch("charm.alloy.get_version", return_value="1.0.0"),
         patch("charm.alloy.is_active", return_value=True),
@@ -1257,7 +1257,7 @@ def test_snap_failure_blocks_but_still_writes_config():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False)),
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False, known=True)),
         patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
         patch("charm.alloy.get_version", return_value="1.0.0"),
         patch("charm.alloy.is_active", return_value=True),
@@ -1276,6 +1276,137 @@ def test_snap_failure_blocks_but_still_writes_config():
     write_config_mock.assert_called()
     assert state_out.unit_status.name == "blocked"
     assert "snap store unreachable" in state_out.unit_status.message
+
+
+def test_node_exporter_error_blocks_even_when_topology_is_missing():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(config={"enable-node-exporter": True}, leader=True)
+
+    with (
+        patch(
+            "charm.node_exporter.observe",
+            return_value=SimpleNamespace(installed=False, enabled=False, known=True),
+        ),
+        patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+    ):
+        state_out = ctx.run(ctx.on.update_status(), state)
+
+    assert state_out.unit_status.name == "blocked"
+    assert "snap store unreachable" in state_out.unit_status.message
+
+
+def test_disabling_node_exporter_drops_the_job_and_leaves_the_unit_active():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload()},
+            ),
+        ],
+        stored_states={
+            testing.StoredState(
+                owner_path="AlloySubCharm",
+                name="_stored",
+                content={
+                    "last_good_config": "",
+                    "last_custom_args": "",
+                    "node_exporter_prior_state": "enabled",
+                },
+            )
+        },
+        config={"enable-node-exporter": False},
+        leader=True,
+    )
+
+    with (
+        patch(
+            "charm.node_exporter.observe",
+            return_value=SimpleNamespace(installed=True, enabled=True, known=True),
+        ),
+        patch("charm.node_exporter.apply") as apply_mock,
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
+        builder_cls.return_value.build.return_value = ""
+        state_out = ctx.run(ctx.on.update_status(), state)
+
+    jobs = builder_cls.call_args.kwargs["metrics_scrape_jobs"]
+    assert [job for job in jobs if job.job_name == "node-exporter"] == []
+    assert apply_mock.call_args.args[0].actions == ("disable",)
+    assert state_out.unit_status.name == "active"
+
+
+def test_source_topology_charm_name_labels_the_scrape_jobs():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        schema_version=2,
+                        charm_name="",
+                        source_topology={
+                            "model": "prod",
+                            "model_uuid": "uuid-1",
+                            "application": "polkadot",
+                            "unit": "polkadot/0",
+                            "charm_name": "polkadot",
+                        },
+                        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}],
+                    )
+                },
+            ),
+        ],
+        leader=True,
+    )
+
+    with (
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
+        builder_cls.return_value.build.return_value = ""
+        ctx.run(ctx.on.update_status(), state)
+
+    assert builder_cls.call_args.kwargs["topology_labels"]["juju_charm"] == "polkadot"
+    jobs = builder_cls.call_args.kwargs["metrics_scrape_jobs"]
+    assert jobs[0].targets[0].labels["juju_charm"] == "polkadot"
 
 
 def _run_remove_with_prior_state(prior_state):

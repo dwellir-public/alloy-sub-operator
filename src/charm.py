@@ -279,9 +279,16 @@ class AlloySubCharm(ops.CharmBase):
         principal_context = self._principal_context()
         if principal_context is None:
             self._reset_config_for_missing_relations()
-            self.unit.status = ops.WaitingStatus(
-                self._status_message("config waiting for juju-info relation or machine-observability source_topology")
-            )
+            if node_exporter_error is not None:
+                # The snap has already been touched by the reconcile above, so a
+                # failure there must surface even though no config is rendered.
+                self.unit.status = ops.BlockedStatus(self._status_message(f"node-exporter: {node_exporter_error}"))
+            else:
+                self.unit.status = ops.WaitingStatus(
+                    self._status_message(
+                        "config waiting for juju-info relation or machine-observability source_topology"
+                    )
+                )
             return False
         if not self._has_machine_observability_relation() and not self._node_exporter_enabled():
             self._reset_config_for_missing_relations()
@@ -298,7 +305,7 @@ class AlloySubCharm(ops.CharmBase):
         )
         logger.info("Configuring Alloy with principal context: %s and payload: %s", principal_context, payload)
 
-        topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
+        topology_labels = principal_context.juju_labels(charm_name=payload.charm_name or None)
         metrics_scrape_jobs = self._active_metrics_scrape_jobs(payload, principal_context)
         if scrape_enabled:
             metrics_scrape_jobs = [
@@ -540,7 +547,7 @@ class AlloySubCharm(ops.CharmBase):
         self, payload: MachineObservabilityPayload, principal_context: PrincipalContext
     ) -> list[BuilderMetricsScrapeJob]:
         """Translate active metrics endpoints from the machine-observability payload."""
-        topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
+        topology_labels = principal_context.juju_labels(charm_name=payload.charm_name or None)
         translated_jobs = [
             translate_metrics_endpoint(
                 endpoint,

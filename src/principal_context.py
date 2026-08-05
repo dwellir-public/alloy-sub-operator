@@ -68,7 +68,7 @@ class PrincipalContext:
             address="",
             model=getattr(topology, "model", "") or model_name,
             model_uuid=getattr(topology, "model_uuid", "") or model_uuid,
-            charm_name=getattr(topology, "charm_name", "") or "",
+            charm_name=getattr(topology, "charm_name", ""),
         )
 
     def juju_labels(self, *, charm_name: str | None = None) -> dict[str, str]:

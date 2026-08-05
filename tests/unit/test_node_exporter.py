@@ -45,6 +45,29 @@ class ObserveSpy:
         return self.state
 
 
+class _FakeMachine:
+    """A machine whose snap state actually changes when a plan is applied."""
+
+    def __init__(self, state):
+        self.state = state
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        return self.state
+
+    def apply(self, plan):
+        for action in plan.actions:
+            if action == ACTION_INSTALL:
+                self.state = SnapState(installed=True, enabled=True)
+            elif action == ACTION_ENABLE:
+                self.state = SnapState(installed=True, enabled=True)
+            elif action == ACTION_DISABLE:
+                self.state = SnapState(installed=True, enabled=False)
+            elif action == ACTION_REMOVE:
+                self.state = SnapState(installed=False, enabled=False)
+
+
 # --- Rule 1: the opt-in gate ---
 
 
@@ -100,19 +123,41 @@ def test_enabled_from_unset_with_snap_running_only_connects_and_records_enabled(
 # --- Rule 2: config governs after opt-in ---
 
 
-def test_enabled_after_opt_in_only_connects_and_does_not_reobserve():
+def test_enabled_after_opt_in_reobserves_and_reinstalls_a_vanished_snap():
     for prior in (PRIOR_STATE_ABSENT, PRIOR_STATE_DISABLED, PRIOR_STATE_ENABLED):
         spy = ObserveSpy(SnapState(installed=False, enabled=False))
 
         plan = plan_reconcile(enabled=True, prior_state=prior, observe=spy)
 
-        assert plan.actions == (ACTION_CONNECT,), prior
+        assert plan.actions == (ACTION_INSTALL, ACTION_CONNECT), prior
         assert plan.prior_state == prior, prior
         assert plan.scrape_enabled is True, prior
-        assert spy.calls == 0, prior
+        assert spy.calls == 1, prior
 
 
-def test_disabled_after_opt_in_disables_for_every_prior_state():
+def test_enabled_after_opt_in_reenables_a_disabled_snap():
+    for prior in (PRIOR_STATE_ABSENT, PRIOR_STATE_DISABLED, PRIOR_STATE_ENABLED):
+        spy = ObserveSpy(SnapState(installed=True, enabled=False))
+
+        plan = plan_reconcile(enabled=True, prior_state=prior, observe=spy)
+
+        assert plan.actions == (ACTION_ENABLE, ACTION_CONNECT), prior
+        assert plan.prior_state == prior, prior
+        assert plan.scrape_enabled is True, prior
+
+
+def test_enabled_after_opt_in_on_a_running_snap_issues_nothing():
+    for prior in (PRIOR_STATE_ABSENT, PRIOR_STATE_DISABLED, PRIOR_STATE_ENABLED):
+        spy = ObserveSpy(SnapState(installed=True, enabled=True))
+
+        plan = plan_reconcile(enabled=True, prior_state=prior, observe=spy)
+
+        assert plan.actions == (), prior
+        assert plan.prior_state == prior, prior
+        assert plan.scrape_enabled is True, prior
+
+
+def test_disabled_after_opt_in_disables_a_running_snap_for_every_prior_state():
     for prior in (PRIOR_STATE_ABSENT, PRIOR_STATE_DISABLED, PRIOR_STATE_ENABLED):
         spy = ObserveSpy(SnapState(installed=True, enabled=True))
 
@@ -122,6 +167,94 @@ def test_disabled_after_opt_in_disables_for_every_prior_state():
         assert ACTION_REMOVE not in plan.actions, prior
         assert plan.prior_state == prior, prior
         assert plan.scrape_enabled is False, prior
+
+
+def test_disabled_after_opt_in_issues_nothing_when_the_snap_is_already_disabled():
+    for prior in (PRIOR_STATE_ABSENT, PRIOR_STATE_DISABLED, PRIOR_STATE_ENABLED):
+        spy = ObserveSpy(SnapState(installed=True, enabled=False))
+
+        plan = plan_reconcile(enabled=False, prior_state=prior, observe=spy)
+
+        assert plan.actions == (), prior
+        assert plan.prior_state == prior, prior
+        assert plan.scrape_enabled is False, prior
+
+
+def test_disabled_after_opt_in_issues_nothing_when_the_snap_is_absent():
+    for prior in (PRIOR_STATE_ABSENT, PRIOR_STATE_DISABLED, PRIOR_STATE_ENABLED):
+        spy = ObserveSpy(SnapState(installed=False, enabled=False))
+
+        plan = plan_reconcile(enabled=False, prior_state=prior, observe=spy)
+
+        assert plan.actions == (), prior
+        assert plan.prior_state == prior, prior
+
+
+def test_second_disable_reconcile_does_not_reissue_disable():
+    machine = _FakeMachine(SnapState(installed=True, enabled=True))
+    prior = PRIOR_STATE_ENABLED
+
+    first = plan_reconcile(enabled=False, prior_state=prior, observe=machine)
+    machine.apply(first)
+    second = plan_reconcile(enabled=False, prior_state=first.prior_state, observe=machine)
+
+    assert first.actions == (ACTION_DISABLE,)
+    assert second.actions == ()
+
+
+def test_second_enable_reconcile_on_a_running_snap_issues_nothing():
+    machine = _FakeMachine(SnapState(installed=True, enabled=True))
+
+    first = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=machine)
+    machine.apply(first)
+    second = plan_reconcile(enabled=True, prior_state=first.prior_state, observe=machine)
+
+    assert first.actions == (ACTION_CONNECT,)
+    assert second.actions == ()
+    assert second.scrape_enabled is True
+
+
+# --- Unknown machine state: never guess ---
+
+
+def test_unknown_snap_state_on_first_opt_in_records_enabled_and_acts_on_nothing():
+    spy = ObserveSpy(SnapState(installed=False, enabled=False, known=False))
+
+    plan = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=spy)
+
+    assert plan.actions == ()
+    assert plan.prior_state == PRIOR_STATE_ENABLED
+    assert plan.scrape_enabled is False
+
+
+def test_teardown_after_an_unknown_first_opt_in_reenables_and_never_removes():
+    spy = ObserveSpy(SnapState(installed=False, enabled=False, known=False))
+
+    plan = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=spy)
+    teardown = plan_teardown(prior_state=plan.prior_state)
+
+    assert teardown.actions == (ACTION_ENABLE,)
+    assert ACTION_REMOVE not in teardown.actions
+
+
+def test_unknown_snap_state_after_opt_in_takes_no_action_and_keeps_prior_state():
+    for prior in (PRIOR_STATE_ABSENT, PRIOR_STATE_DISABLED, PRIOR_STATE_ENABLED):
+        spy = ObserveSpy(SnapState(installed=False, enabled=False, known=False))
+
+        plan = plan_reconcile(enabled=True, prior_state=prior, observe=spy)
+
+        assert plan.actions == (), prior
+        assert plan.prior_state == prior, prior
+        assert plan.scrape_enabled is False, prior
+
+
+def test_unknown_snap_state_on_the_disable_path_takes_no_action():
+    spy = ObserveSpy(SnapState(installed=False, enabled=False, known=False))
+
+    plan = plan_reconcile(enabled=False, prior_state=PRIOR_STATE_ENABLED, observe=spy)
+
+    assert plan.actions == ()
+    assert plan.prior_state == PRIOR_STATE_ENABLED
 
 
 # --- Teardown: full restore ---
@@ -163,6 +296,33 @@ def test_preexisting_running_snap_survives_false_true_false_teardown():
     assert seen == [(), (ACTION_CONNECT,), (ACTION_DISABLE,), (ACTION_ENABLE,)]
 
 
+def test_true_false_true_leaves_the_snap_enabled():
+    machine = _FakeMachine(SnapState(installed=True, enabled=True))
+    prior = PRIOR_STATE_UNSET
+    seen = []
+
+    for enabled in (True, False, True):
+        plan = plan_reconcile(enabled=enabled, prior_state=prior, observe=machine)
+        machine.apply(plan)
+        seen.append(plan.actions)
+        prior = plan.prior_state
+
+    assert seen == [(ACTION_CONNECT,), (ACTION_DISABLE,), (ACTION_ENABLE, ACTION_CONNECT)]
+    assert machine.state == SnapState(installed=True, enabled=True)
+    assert prior == PRIOR_STATE_ENABLED
+
+
+def test_failed_install_is_retried_on_the_next_reconcile():
+    machine = _FakeMachine(SnapState(installed=False, enabled=False))
+
+    first = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=machine)
+    # `apply` raised: the machine is untouched.
+    second = plan_reconcile(enabled=True, prior_state=first.prior_state, observe=machine)
+
+    assert first.actions == (ACTION_INSTALL, ACTION_CONNECT)
+    assert second.actions == (ACTION_INSTALL, ACTION_CONNECT)
+
+
 # --- Snap effects tests ---
 
 SNAP_LIST_ENABLED = (
@@ -179,19 +339,51 @@ def _completed(stdout=""):
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
 
-def test_observe_reports_absent_when_snap_list_exits_nonzero():
+def _snap_error(stdout="", stderr=""):
+    return subprocess.CalledProcessError(1, ["snap", "list", SNAP_NAME], output=stdout, stderr=stderr)
+
+
+def test_observe_reports_absent_when_snapd_says_no_matching_snaps_installed():
+    error = _snap_error(stderr="error: no matching snaps installed\n")
+
+    with patch("src.node_exporter._run", side_effect=error):
+        assert observe() == SnapState(installed=False, enabled=False, known=True)
+
+
+def test_observe_reports_absent_when_the_marker_arrives_on_stdout():
+    error = _snap_error(stdout="error: no matching snaps installed\n")
+
+    with patch("src.node_exporter._run", side_effect=error):
+        assert observe() == SnapState(installed=False, enabled=False, known=True)
+
+
+def test_observe_reports_unknown_when_snapd_is_unreachable():
+    error = _snap_error(stderr="error: cannot communicate with server: dial unix /run/snapd.socket: connect\n")
+
+    with patch("src.node_exporter._run", side_effect=error):
+        assert observe() == SnapState(installed=False, enabled=False, known=False)
+
+
+def test_observe_reports_unknown_when_snap_list_exits_nonzero_without_explanation():
     with patch("src.node_exporter._run", side_effect=subprocess.CalledProcessError(1, "snap")):
-        assert observe() == SnapState(installed=False, enabled=False)
+        assert observe() == SnapState(installed=False, enabled=False, known=False)
 
 
-def test_observe_reports_absent_when_snap_binary_not_found():
+def test_observe_reports_unknown_when_snap_binary_not_found():
     with patch("src.node_exporter._run", side_effect=FileNotFoundError()):
-        assert observe() == SnapState(installed=False, enabled=False)
+        assert observe() == SnapState(installed=False, enabled=False, known=False)
 
 
-def test_observe_reports_absent_when_snap_command_times_out():
+def test_observe_reports_unknown_when_snap_command_times_out():
     with patch("src.node_exporter._run", side_effect=subprocess.TimeoutExpired(cmd="snap", timeout=60)):
-        assert observe() == SnapState(installed=False, enabled=False)
+        assert observe() == SnapState(installed=False, enabled=False, known=False)
+
+
+def test_observe_reports_absent_when_snap_list_omits_the_row():
+    header = "Name  Version  Rev  Tracking  Publisher  Notes\n"
+
+    with patch("src.node_exporter._run", return_value=_completed(header)):
+        assert observe() == SnapState(installed=False, enabled=False, known=True)
 
 
 def test_observe_reports_enabled_snap():
@@ -225,6 +417,34 @@ def test_effects_build_expected_argv():
     assert run_mock.call_args_list[1].args[0] == ["snap", "enable", SNAP_NAME]
     assert run_mock.call_args_list[2].args[0] == ["snap", "disable", SNAP_NAME]
     assert run_mock.call_args_list[3].args[0] == ["snap", "remove", "--purge", SNAP_NAME]
+
+
+def test_failed_snap_command_reports_snapd_own_explanation():
+    completed = subprocess.CompletedProcess(args=["snap", "enable", SNAP_NAME], returncode=1, stdout="", stderr="")
+
+    with patch("src.node_exporter.subprocess.run") as run_mock:
+        run_mock.side_effect = subprocess.CalledProcessError(
+            1,
+            completed.args,
+            output="",
+            stderr='error: cannot perform the following tasks:\n- Enable snap "node-exporter" (unset)\n',
+        )
+        try:
+            enable()
+        except subprocess.CalledProcessError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - the call above always raises
+            raise AssertionError("enable() did not raise")
+
+    assert "cannot perform the following tasks" in message
+    assert 'Enable snap "node-exporter"' in message
+
+
+def test_run_does_not_inject_apt_environment_variables():
+    with patch("src.node_exporter.subprocess.run", return_value=_completed()) as run_mock:
+        install()
+
+    assert "env" not in run_mock.call_args.kwargs or run_mock.call_args.kwargs["env"] is None
 
 
 def test_connect_interfaces_connects_every_required_interface():
