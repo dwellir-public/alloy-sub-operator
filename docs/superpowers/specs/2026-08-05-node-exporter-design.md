@@ -5,9 +5,10 @@
 Add an `enable-node-exporter` config option to `alloy-sub`. When enabled, the charm installs
 (or re-enables) the Canonical `node-exporter` snap on the principal's machine, connects the
 snap interfaces needed for full hardware and OS metrics, and renders an Alloy scrape job that
-forwards those metrics with the principal's Juju topology labels. When disabled, the snap is
-disabled if present and the scrape job is dropped from the rendered config. When the
-subordinate unit is torn down, a charm-installed snap is removed.
+forwards those metrics with the principal's Juju topology labels. When disabled, the scrape job
+is dropped and the charm restores whatever snap state it found before it first acted. When the
+subordinate unit is torn down, a snap the charm installed is removed; anything pre-existing is
+left as the charm found it.
 
 Delivering this correctly requires first closing a latent gap: `alloy-sub` derives Juju
 topology exclusively from the `juju-info` relation, which Juju never creates automatically.
@@ -27,7 +28,8 @@ That gap is in scope here because node-exporter metrics are worthless without to
   Operators can set those directly on the snap. Revisit if a real need appears.
 - Do not make the scrape port configurable. The snap listens on 9100.
 - Do not migrate Alloy itself from APT to snap.
-- Do not remove a node-exporter snap the charm did not install.
+- Do not remove, disable, or otherwise alter a node-exporter snap that was already installed and
+  running before the charm first acted on it.
 - Do not add TLS or authentication to the local node-exporter scrape.
 
 ## Background
@@ -141,9 +143,9 @@ enable-node-exporter:
     Install and enable the node-exporter snap on the principal machine and scrape its
     metrics with the principal's Juju topology labels.
 
-    When false, an installed node-exporter snap is disabled and its scrape job is removed
-    from the Alloy config. The snap is not removed. A snap installed by this charm is
-    removed when the subordinate unit is torn down.
+    When false, the scrape job is removed from the Alloy config and the charm restores
+    whatever snap state it found before it first acted. A node-exporter that was already
+    installed and running before this charm touched it is left alone.
   type: boolean
   default: false
 ```
@@ -153,22 +155,38 @@ test stays green without modification.
 
 ### Section 3: reconcile
 
-`_stored` gains `node_exporter_installed_by_charm: bool`, set `True` only when `install()`
-succeeds on a machine where `is_installed()` returned `False` beforehand. This flag is the sole
-authority for teardown.
+`_stored` gains `node_exporter_prior_state: str`, one of `""` (the charm has never acted on the
+snap), `"absent"`, `"disabled"`, or `"enabled"`. It is written exactly once — the first time
+reconcile runs with the config `true` — and records the snap state the charm found before it
+changed anything. It is the sole authority for both the `false` path and teardown.
+
+A single boolean would not be enough. If the snap was pre-existing but *disabled* and the charm
+enabled it, flipping back to `false` should re-disable it, because the charm caused that state.
+"Did we install it" cannot express that; "what did we find" can.
 
 New `_reconcile_node_exporter() -> tuple[bool, str | None]` returns `(scrape_enabled, error)`:
 
-| config | machine state | action |
+| prior state | config `true` | config `false` |
 |---|---|---|
-| `true` | not installed | `install()` → mark owned → `connect_interfaces()` |
-| `true` | installed, disabled | `enable()` → `connect_interfaces()` |
-| `true` | installed, enabled | `connect_interfaces()` (no-op) |
-| `false` | installed | `disable()` — never remove |
-| `false` | not installed | nothing |
+| `""` — never touched | record prior state, then act per the row it lands on | **nothing** |
+| `absent` — we installed it | `connect_interfaces()` | `disable()` |
+| `disabled` — we enabled it | `connect_interfaces()` | `disable()` |
+| `enabled` — already running | `connect_interfaces()` | **leave alone** |
 
-It is called at the **top of `_configure()`**, before any early return, so a `false` setting
-disables the snap regardless of relation state.
+Recording plus first action, for the `""` row: `absent` → `install()` then
+`connect_interfaces()`; `disabled` → `enable()` then `connect_interfaces()`; `enabled` →
+`connect_interfaces()` only.
+
+The governing invariant: **the charm never leaves the snap in a state the operator did not ask
+for, and never touches a snap it never enabled.**
+
+This matters because the default is `false`. Under an unconditional "disable if installed"
+rule, merely deploying `alloy-sub` onto a machine already running node-exporter for another
+consumer would disable it before the operator touched any config. The `""` row makes a
+default-config deployment a genuine no-op.
+
+It is called at the **top of `_configure()`**, before any early return, so the `false` path runs
+regardless of relation state.
 
 On snap failure it returns the error message and `scrape_enabled=False`. `_configure()` then
 skips only the node-exporter job, renders and applies the rest of the config normally, and sets
@@ -244,9 +262,19 @@ A new handler on `self.on.remove`:
 
 ```python
 def _on_remove(self, _: ops.RemoveEvent) -> None:
-    if self._stored.node_exporter_installed_by_charm:
-        node_exporter.remove()
+    self._restore_node_exporter_prior_state()
 ```
+
+Teardown restores the same recorded prior state, with one difference from the config `false`
+path: an `absent` prior state means the charm installed the snap, and unit removal is the point
+at which it is removed rather than merely disabled.
+
+| prior state | teardown action |
+|---|---|
+| `""` — never touched | nothing |
+| `absent` — we installed it | `snap remove --purge` |
+| `disabled` — we enabled it | `disable()` |
+| `enabled` — already running | leave alone |
 
 Removing the `juju-info` relation (or the last container-scoped relation) destroys the
 subordinate unit, so Juju fires `stop` then `remove` and this runs. A snap that was already on
@@ -270,16 +298,25 @@ Failures are logged, not raised — a failing teardown must not wedge unit remov
 ### `tests/unit/test_charm.py` (additions)
 
 - Enabled renders a `node-exporter` job carrying the principal topology labels.
-- Disabled calls `disable()` and renders no node-exporter job.
-- Disabled with the snap absent performs no snap operations.
+- Enabled records `prior_state` once and does not overwrite it on a later reconcile.
 - `juju-info` only, no `machine-observability`, enabled → Active.
 - No `juju-info`, v2 payload with `source_topology` → Active with topology labels from the
   payload.
 - No `juju-info`, v1 payload → Waiting.
 - `juju-info` present and `source_topology` also present → `juju-info` wins.
-- `remove` removes the snap when `node_exporter_installed_by_charm` is set.
-- `remove` does not remove the snap when the flag is unset.
 - Snap install failure → Blocked, but the rest of the config is still written.
+
+Prior-state matrix, one test per cell — these are the cells that protect a foreign snap:
+
+- config `false`, `prior_state=""`, snap installed and running → **no snap command is issued at
+  all**, and no node-exporter job is rendered. This is the default-deployment no-op.
+- config `false`, `prior_state="absent"` → `disable()`, not `remove()`.
+- config `false`, `prior_state="disabled"` → `disable()`.
+- config `false`, `prior_state="enabled"` → no snap command.
+- `remove`, `prior_state="absent"` → `snap remove --purge`.
+- `remove`, `prior_state="disabled"` → `disable()`, not `remove()`.
+- `remove`, `prior_state="enabled"` → no snap command.
+- `remove`, `prior_state=""` → no snap command.
 
 ### `tests/unit/test_repo_baseline.py` (addition)
 
@@ -309,9 +346,14 @@ slice; the snap path needs a real machine and is verified manually per the READM
 
 - **Snap availability.** `snap install` needs network access to the store. Air-gapped machines
   will fail the reconcile and land in Blocked with the snap error. Acceptable and visible.
-- **Ownership flag loss.** `StoredState` lives in the unit's local database. If it were lost,
-  teardown would skip removal, leaving the snap behind. Leaving a snap installed is the safe
-  failure direction.
+- **Prior-state loss.** `StoredState` lives in the unit's local database. If it were lost, the
+  charm would read `""` and take no snap action on either the `false` path or teardown, leaving
+  the snap installed and running. That is the safe failure direction: the charm errs toward
+  leaving the machine alone rather than toward disabling or removing something.
+- **Prior state is recorded once, not continuously.** If an operator manually disables the snap
+  while the charm has it enabled, the charm re-enables it on the next reconcile. That is
+  intended — config is the declared intent — but it means `snap disable` by hand is not a
+  durable override. Setting `enable-node-exporter=false` is.
 - **Port collision.** Something already bound to 9100 would make the snap fail to start; Alloy
   would then scrape a dead target and surface it as a scrape failure rather than a charm error.
   Not worth guarding in this slice.
