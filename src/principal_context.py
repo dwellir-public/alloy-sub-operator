@@ -53,6 +53,24 @@ class PrincipalContext:
             charm_name=charm_name,
         )
 
+    @classmethod
+    def from_source_topology(
+        cls,
+        topology: Any,
+        *,
+        model_name: str = "",
+        model_uuid: str = "",
+    ) -> "PrincipalContext":
+        """Build principal context from an explicit v2 source topology block."""
+        return cls(
+            application=topology.application,
+            unit=topology.unit,
+            address="",
+            model=getattr(topology, "model", "") or model_name,
+            model_uuid=getattr(topology, "model_uuid", "") or model_uuid,
+            charm_name=getattr(topology, "charm_name", "") or "",
+        )
+
     def juju_labels(self, *, charm_name: str | None = None) -> dict[str, str]:
         """Render the principal context as Juju label key-value pairs."""
         labels = {
