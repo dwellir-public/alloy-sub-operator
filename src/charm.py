@@ -24,7 +24,7 @@ try:
         GrafanaCloudConfigRequirer,
     )
 
-    from . import alloy
+    from . import alloy, node_exporter
     from .config_builder import (
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
@@ -51,6 +51,7 @@ except ImportError:
     )
 
     import alloy
+    import node_exporter
     from config_builder import (
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
@@ -163,7 +164,7 @@ class AlloySubCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
-        self._stored.set_default(last_good_config="", last_custom_args="")
+        self._stored.set_default(last_good_config="", last_custom_args="", node_exporter_prior_state="")
         self.machine_observability_consumer = MachineObservabilityConsumer(self)
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
 
@@ -265,12 +266,16 @@ class AlloySubCharm(ops.CharmBase):
 
     def _configure(self, *, active_message: str) -> bool:
         """Render, validate, and apply Alloy config from relation data."""
+        scrape_enabled, node_exporter_error = self._reconcile_node_exporter()
+
         principal_context = self._principal_context()
         if principal_context is None:
             self._reset_config_for_missing_relations()
-            self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
+            self.unit.status = ops.WaitingStatus(
+                self._status_message("config waiting for juju-info relation or machine-observability source_topology")
+            )
             return False
-        if not self._has_machine_observability_relation():
+        if not self._has_machine_observability_relation() and not self._node_exporter_enabled():
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(
                 self._status_message("config waiting for machine-observability relation")
@@ -285,10 +290,22 @@ class AlloySubCharm(ops.CharmBase):
         )
         logger.info("Configuring Alloy with principal context: %s and payload: %s", principal_context, payload)
 
+        topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
+        metrics_scrape_jobs = self._active_metrics_scrape_jobs(payload, principal_context)
+        if scrape_enabled:
+            metrics_scrape_jobs = [
+                *metrics_scrape_jobs,
+                node_exporter.scrape_job(
+                    topology_labels=topology_labels,
+                    scrape_interval=self._global_scrape_interval(),
+                    scrape_timeout=self._global_scrape_timeout(),
+                ),
+            ]
+
         builder = ConfigBuilder(
             loki_endpoints=loki_endpoints,
             remote_write_endpoints=remote_write_endpoints,
-            metrics_scrape_jobs=self._active_metrics_scrape_jobs(payload, principal_context),
+            metrics_scrape_jobs=metrics_scrape_jobs,
             systemd_units=payload.systemd_units,
             journal_match_expressions=payload.journal_match_expressions,
             file_log_sources=[
@@ -299,7 +316,7 @@ class AlloySubCharm(ops.CharmBase):
                 )
                 for source in payload.log_files
             ],
-            topology_labels=principal_context.juju_labels(charm_name=payload.charm_name),
+            topology_labels=topology_labels,
             global_scrape_interval=self._global_scrape_interval(),
             global_scrape_timeout=self._global_scrape_timeout(),
             path_exclude=[],
@@ -327,13 +344,33 @@ class AlloySubCharm(ops.CharmBase):
                 desired_custom_args=desired_custom_args,
                 previous_custom_args=previous_custom_args,
             )
+        if node_exporter_error is not None:
+            self.unit.status = ops.BlockedStatus(self._status_message(f"node-exporter: {node_exporter_error}"))
+            return False
         if waiting_requirements:
             self.unit.status = ops.WaitingStatus(
                 self._status_message(self._relation_waiting_message(waiting_requirements))
             )
             return False
+        if not self._has_machine_observability_relation():
+            active_message = "node-exporter metrics only"
         self.unit.status = ops.ActiveStatus(self._status_message(f"config valid; {active_message}"))
         return True
+
+    def _reconcile_node_exporter(self) -> tuple[bool, str | None]:
+        """Bring the node-exporter snap in line with config; return (scrape_enabled, error)."""
+        plan = node_exporter.plan_reconcile(
+            enabled=self._node_exporter_enabled(),
+            prior_state=self._stored.node_exporter_prior_state,
+            observe=node_exporter.observe,
+        )
+        self._stored.node_exporter_prior_state = plan.prior_state
+        try:
+            node_exporter.apply(plan)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("node-exporter reconcile failed: %s", exc)
+            return False, str(exc)
+        return plan.scrape_enabled, None
 
     @staticmethod
     def _logs_declared(payload: MachineObservabilityPayload) -> bool:
@@ -361,7 +398,7 @@ class AlloySubCharm(ops.CharmBase):
         missing_relations: list[str] = []
         if principal_context is None:
             missing_relations.append("juju-info relation")
-        if not self._has_machine_observability_relation():
+        if not self._has_machine_observability_relation() and not self._node_exporter_enabled():
             missing_relations.append("machine-observability relation")
         return missing_relations
 
@@ -546,6 +583,10 @@ class AlloySubCharm(ops.CharmBase):
     def _tls_insecure_skip_verify(self) -> bool:
         """Return whether scrape TLS verification should be skipped."""
         return bool(self.config.get("tls_insecure_skip_verify", False))
+
+    def _node_exporter_enabled(self) -> bool:
+        """Return whether the operator has enabled node-exporter management."""
+        return bool(self.config.get("enable-node-exporter", False))
 
     def _queue_size(self) -> int:
         """Return queue size for outbound telemetry buffering."""

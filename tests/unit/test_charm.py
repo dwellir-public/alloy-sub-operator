@@ -267,7 +267,9 @@ def test_start_waits_for_required_relations_when_missing():
     ):
         state_out = ctx.run(ctx.on.start(), testing.State())
 
-    assert state_out.unit_status == testing.WaitingStatus("Alloy service down; config waiting for juju-info relation")
+    assert state_out.unit_status == testing.WaitingStatus(
+        "Alloy service down; config waiting for juju-info relation or machine-observability source_topology"
+    )
 
 
 def test_start_waits_for_machine_observability_relation():
@@ -653,6 +655,8 @@ def test_configure_restarts_alloy_when_custom_args_change():
         _remote_write_endpoint_urls=lambda: [],
         _logs_declared=lambda payload: False,
         _has_machine_observability_relation=lambda: True,
+        _reconcile_node_exporter=lambda: (False, None),
+        _node_exporter_enabled=lambda: False,
         _active_metrics_scrape_jobs=lambda payload, principal_context: [],
         _path_exclude_patterns=lambda: "",
         _global_scrape_interval=lambda: "1m",
@@ -709,6 +713,8 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         _remote_write_endpoint_urls=lambda: [],
         _logs_declared=lambda payload: False,
         _has_machine_observability_relation=lambda: True,
+        _reconcile_node_exporter=lambda: (False, None),
+        _node_exporter_enabled=lambda: False,
         _active_metrics_scrape_jobs=lambda payload, principal_context: [],
         _path_exclude_patterns=lambda: "",
         _global_scrape_interval=lambda: "1m",
@@ -765,6 +771,8 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         _remote_write_endpoint_urls=lambda: [],
         _logs_declared=lambda payload: False,
         _has_machine_observability_relation=lambda: True,
+        _reconcile_node_exporter=lambda: (False, None),
+        _node_exporter_enabled=lambda: False,
         _active_metrics_scrape_jobs=lambda payload, principal_context: [],
         _path_exclude_patterns=lambda: "",
         _global_scrape_interval=lambda: "1m",
@@ -1090,3 +1098,181 @@ def test_principal_context_is_none_for_v1_payload_without_juju_info():
 
     with ctx(ctx.on.update_status(), state) as manager:
         assert manager.charm._principal_context() is None
+
+
+def test_reconcile_node_exporter_persists_prior_state_before_applying():
+    fake_charm = SimpleNamespace(
+        _stored=SimpleNamespace(node_exporter_prior_state=""),
+        _node_exporter_enabled=lambda: True,
+    )
+
+    with (
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False)),
+        patch("charm.node_exporter.apply") as apply_mock,
+    ):
+        scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
+
+    assert scrape_enabled is True
+    assert error is None
+    assert fake_charm._stored.node_exporter_prior_state == "absent"
+    apply_mock.assert_called_once()
+
+
+def test_reconcile_node_exporter_records_prior_state_even_when_apply_fails():
+    fake_charm = SimpleNamespace(
+        _stored=SimpleNamespace(node_exporter_prior_state=""),
+        _node_exporter_enabled=lambda: True,
+    )
+
+    with (
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False)),
+        patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
+    ):
+        scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
+
+    assert scrape_enabled is False
+    assert error == "snap store unreachable"
+    assert fake_charm._stored.node_exporter_prior_state == "absent"
+
+
+def test_reconcile_node_exporter_issues_nothing_when_never_opted_in():
+    fake_charm = SimpleNamespace(
+        _stored=SimpleNamespace(node_exporter_prior_state=""),
+        _node_exporter_enabled=lambda: False,
+    )
+
+    with (
+        patch("charm.node_exporter.observe") as observe_mock,
+        patch("charm.node_exporter.apply") as apply_mock,
+    ):
+        scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
+
+    assert scrape_enabled is False
+    assert error is None
+    observe_mock.assert_not_called()
+    apply_mock.assert_called_once()
+    assert apply_mock.call_args.args[0].actions == ()
+
+
+def test_node_exporter_job_is_rendered_with_topology_labels():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload()},
+            ),
+        ],
+        config={"enable-node-exporter": True},
+        leader=True,
+    )
+
+    with (
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True)),
+        patch("charm.node_exporter.apply"),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
+        builder_cls.return_value.build.return_value = ""
+        ctx.run(ctx.on.update_status(), state)
+
+    jobs = builder_cls.call_args.kwargs["metrics_scrape_jobs"]
+    node_jobs = [job for job in jobs if job.job_name == "node-exporter"]
+    assert len(node_jobs) == 1
+    assert node_jobs[0].targets[0].address == "localhost:9100"
+    assert node_jobs[0].targets[0].labels["juju_unit"] == "polkadot/0"
+
+
+def test_node_exporter_only_mode_is_active_without_machine_observability():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+        ],
+        config={"enable-node-exporter": True},
+        leader=True,
+    )
+
+    with (
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True)),
+        patch("charm.node_exporter.apply"),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
+        builder_cls.return_value.build.return_value = ""
+        state_out = ctx.run(ctx.on.update_status(), state)
+
+    assert state_out.unit_status.name == "active"
+    assert "node-exporter metrics only" in state_out.unit_status.message
+
+
+def test_snap_failure_blocks_but_still_writes_config():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload()},
+            ),
+        ],
+        config={"enable-node-exporter": True},
+        leader=True,
+    )
+
+    with (
+        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False)),
+        patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text") as write_config_mock,
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
+        builder_cls.return_value.build.return_value = ""
+        state_out = ctx.run(ctx.on.update_status(), state)
+
+    write_config_mock.assert_called()
+    assert state_out.unit_status.name == "blocked"
+    assert "snap store unreachable" in state_out.unit_status.message
