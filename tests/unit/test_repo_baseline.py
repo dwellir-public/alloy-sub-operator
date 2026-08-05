@@ -66,3 +66,10 @@ def test_architecture_doc_describes_subordinate_responsibilities():
     assert "machine-observability" in architecture
     assert "render and validate `/etc/alloy/config.alloy`" in architecture
     assert "forward logs to Loki" in architecture
+
+
+def test_charmcraft_declares_node_exporter_option():
+    charmcraft = Path("charmcraft.yaml").read_text()
+
+    assert "enable-node-exporter:" in charmcraft
+    assert "type: boolean" in charmcraft

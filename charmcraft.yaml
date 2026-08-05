@@ -78,6 +78,18 @@ config:
         Maximum retry window in minutes for outbound telemetry.
       type: int
       default: 5
+    enable-node-exporter:
+      description: |
+        Install and enable the node-exporter snap on the principal machine and scrape its
+        metrics with the principal's Juju topology labels.
+
+        When false, the scrape job is removed from the Alloy config and the snap is disabled,
+        provided this charm had previously enabled it. A node-exporter this charm has never
+        enabled is left untouched, so deploying with the default changes nothing.
+
+        On unit removal the charm restores the snap state it originally found.
+      type: boolean
+      default: false
 
 requires:
   juju-info:
