@@ -1,5 +1,7 @@
+import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -13,9 +15,20 @@ from src.node_exporter import (
     PRIOR_STATE_DISABLED,
     PRIOR_STATE_ENABLED,
     PRIOR_STATE_UNSET,
+    REQUIRED_INTERFACES,
+    SNAP_NAME,
+    Plan,
     SnapState,
+    apply,
+    connect_interfaces,
+    disable,
+    enable,
+    get_version,
+    install,
+    observe,
     plan_reconcile,
     plan_teardown,
+    remove,
 )
 
 
@@ -147,3 +160,96 @@ def test_preexisting_running_snap_survives_false_true_false_teardown():
     seen.append(plan_teardown(prior_state=prior).actions)
 
     assert seen == [(), (ACTION_CONNECT,), (ACTION_DISABLE,), (ACTION_ENABLE,)]
+
+
+# --- Snap effects tests ---
+
+SNAP_LIST_ENABLED = (
+    "Name           Version   Rev   Tracking       Publisher   Notes\n"
+    "node-exporter  v1.10.2   2154  latest/stable  canonical**  -\n"
+)
+SNAP_LIST_DISABLED = (
+    "Name           Version   Rev   Tracking       Publisher   Notes\n"
+    "node-exporter  v1.10.2   2154  latest/stable  canonical**  disabled\n"
+)
+
+
+def _completed(stdout=""):
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+
+
+def test_observe_reports_absent_when_snap_list_exits_nonzero():
+    with patch("src.node_exporter._run", side_effect=subprocess.CalledProcessError(1, "snap")):
+        assert observe() == SnapState(installed=False, enabled=False)
+
+
+def test_observe_reports_enabled_snap():
+    with patch("src.node_exporter._run", return_value=_completed(SNAP_LIST_ENABLED)):
+        assert observe() == SnapState(installed=True, enabled=True)
+
+
+def test_observe_reports_disabled_snap():
+    with patch("src.node_exporter._run", return_value=_completed(SNAP_LIST_DISABLED)):
+        assert observe() == SnapState(installed=True, enabled=False)
+
+
+def test_get_version_reads_the_version_column():
+    with patch("src.node_exporter._run", return_value=_completed(SNAP_LIST_ENABLED)):
+        assert get_version() == "v1.10.2"
+
+
+def test_get_version_is_none_when_snap_absent():
+    with patch("src.node_exporter._run", side_effect=subprocess.CalledProcessError(1, "snap")):
+        assert get_version() is None
+
+
+def test_effects_build_expected_argv():
+    with patch("src.node_exporter._run") as run_mock:
+        install()
+        enable()
+        disable()
+        remove()
+
+    assert run_mock.call_args_list[0].args[0] == ["snap", "install", SNAP_NAME]
+    assert run_mock.call_args_list[1].args[0] == ["snap", "enable", SNAP_NAME]
+    assert run_mock.call_args_list[2].args[0] == ["snap", "disable", SNAP_NAME]
+    assert run_mock.call_args_list[3].args[0] == ["snap", "remove", "--purge", SNAP_NAME]
+
+
+def test_connect_interfaces_connects_every_required_interface():
+    with patch("src.node_exporter._run") as run_mock:
+        connect_interfaces()
+
+    connected = [c.args[0][2] for c in run_mock.call_args_list]
+    assert connected == [f"{SNAP_NAME}:{name}" for name in REQUIRED_INTERFACES]
+
+
+def test_connect_interfaces_continues_past_a_failed_connection():
+    outcomes = [subprocess.CalledProcessError(1, "snap"), _completed(), _completed(), _completed()]
+
+    with patch("src.node_exporter._run", side_effect=outcomes) as run_mock:
+        connect_interfaces()
+
+    assert run_mock.call_count == len(REQUIRED_INTERFACES)
+
+
+def test_apply_dispatches_actions_in_order():
+    plan_val = Plan(actions=(ACTION_INSTALL, ACTION_CONNECT))
+
+    with (
+        patch("src.node_exporter.install") as install_mock,
+        patch("src.node_exporter.connect_interfaces") as connect_mock,
+        patch("src.node_exporter.enable") as enable_mock,
+    ):
+        apply(plan_val)
+
+    install_mock.assert_called_once_with()
+    connect_mock.assert_called_once_with()
+    enable_mock.assert_not_called()
+
+
+def test_apply_does_nothing_for_an_empty_plan():
+    with patch("src.node_exporter._run") as run_mock:
+        apply(Plan())
+
+    run_mock.assert_not_called()
