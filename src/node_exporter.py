@@ -158,8 +158,11 @@ def _plan_enabled(*, prior_state: str, observe: Callable[[], SnapState]) -> Plan
 def _restore_point(state: SnapState) -> str:
     """Return the prior state to record for a first opt-in observation."""
     if not state.known:
-        # The only restore point that can never lead to `snap remove --purge`.
-        return PRIOR_STATE_ENABLED
+        # Nothing was done to the machine, so there is nothing to restore and no
+        # restore point we could honestly record. Staying unset keeps the opt-in
+        # gate closed for one more hook; the next readable observation records the
+        # true restore point instead of a guess we could never correct.
+        return PRIOR_STATE_UNSET
     if not state.installed:
         return PRIOR_STATE_ABSENT
     if not state.enabled:
@@ -167,13 +170,35 @@ def _restore_point(state: SnapState) -> str:
     return PRIOR_STATE_ENABLED
 
 
-def plan_teardown(*, prior_state: str) -> Plan:
-    """Decide what to do to the snap when the unit is being removed."""
-    return Plan(
-        actions=_TEARDOWN_ACTIONS.get(prior_state, ()),
-        prior_state=prior_state,
-        scrape_enabled=False,
-    )
+def plan_teardown(*, prior_state: str, observe: Callable[[], SnapState]) -> Plan:
+    """Decide what to restore to the snap when the unit is being removed.
+
+    Like :func:`plan_reconcile`, the restore action is derived from what the
+    machine actually reports: re-enabling an already-enabled snap exits non-zero
+    and would surface as a teardown failure when nothing failed.
+
+    ``observe`` is not called when the charm was never opted in, and its verdict is
+    ignored when snapd is unreadable -- teardown is the last hook this unit will
+    ever run, so a best-effort restore beats waiting for a hook that never comes.
+    """
+    if prior_state == PRIOR_STATE_UNSET:
+        # The opt-in gate: the charm never touched this machine.
+        return Plan()
+
+    state = observe()
+    actions = _TEARDOWN_ACTIONS.get(prior_state, ()) if not state.known else _restore_actions(prior_state, state)
+    return Plan(actions=actions, prior_state=prior_state, scrape_enabled=False)
+
+
+def _restore_actions(prior_state: str, state: SnapState) -> tuple[str, ...]:
+    """Return the teardown actions the observed machine still needs."""
+    if prior_state == PRIOR_STATE_ABSENT:
+        return (ACTION_REMOVE,) if state.installed else ()
+    if prior_state == PRIOR_STATE_DISABLED:
+        return (ACTION_DISABLE,) if state.installed and state.enabled else ()
+    if prior_state == PRIOR_STATE_ENABLED:
+        return (ACTION_ENABLE,) if state.installed and not state.enabled else ()
+    return ()
 
 
 def _run(cmd: Iterable[str], *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
@@ -224,14 +249,6 @@ def observe() -> SnapState:
         return SnapState(installed=False, enabled=False, known=known)
     notes = fields[5] if len(fields) > 5 else "-"
     return SnapState(installed=True, enabled="disabled" not in notes.split(","))
-
-
-def get_version() -> str | None:
-    """Return the installed node-exporter version, or None when absent."""
-    fields, _ = _snap_list_fields()
-    if fields is None or len(fields) < 2:
-        return None
-    return fields[1]
 
 
 def install() -> None:

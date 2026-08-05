@@ -23,7 +23,6 @@ from src.node_exporter import (
     connect_interfaces,
     disable,
     enable,
-    get_version,
     install,
     observe,
     plan_reconcile,
@@ -82,10 +81,13 @@ def test_disabled_and_never_opted_in_issues_no_command_and_never_observes():
     assert spy.calls == 0
 
 
-def test_teardown_never_opted_in_is_a_no_op():
-    plan = plan_teardown(prior_state=PRIOR_STATE_UNSET)
+def test_teardown_never_opted_in_is_a_no_op_and_never_observes():
+    spy = ObserveSpy(SnapState(installed=True, enabled=True))
+
+    plan = plan_teardown(prior_state=PRIOR_STATE_UNSET, observe=spy)
 
     assert plan.actions == ()
+    assert spy.calls == 0
 
 
 # --- Rule 2: record on first opt-in ---
@@ -217,24 +219,63 @@ def test_second_enable_reconcile_on_a_running_snap_issues_nothing():
 # --- Unknown machine state: never guess ---
 
 
-def test_unknown_snap_state_on_first_opt_in_records_enabled_and_acts_on_nothing():
+def test_unknown_snap_state_on_first_opt_in_records_nothing_and_acts_on_nothing():
     spy = ObserveSpy(SnapState(installed=False, enabled=False, known=False))
 
     plan = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=spy)
 
+    # No action was taken, so there is nothing to restore and no restore point to
+    # record. Recording one here would be a label we could never verify.
     assert plan.actions == ()
-    assert plan.prior_state == PRIOR_STATE_ENABLED
+    assert plan.prior_state == PRIOR_STATE_UNSET
     assert plan.scrape_enabled is False
 
 
-def test_teardown_after_an_unknown_first_opt_in_reenables_and_never_removes():
-    spy = ObserveSpy(SnapState(installed=False, enabled=False, known=False))
+def test_unknown_first_opt_in_then_a_readable_absent_snap_records_absent_and_tears_down():
+    """An unreadable snapd at opt-in must not strand the restore point on `enabled`.
 
-    plan = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=spy)
-    teardown = plan_teardown(prior_state=plan.prior_state)
+    Sequence: snapd is still seeding at the first `true`, then becomes readable and
+    reports the snap genuinely absent. The charm installs it, so teardown must
+    remove it again -- otherwise unit removal leaves node-exporter behind forever.
+    """
+    machine = _FakeMachine(SnapState(installed=False, enabled=False, known=False))
 
-    assert teardown.actions == (ACTION_ENABLE,)
-    assert ACTION_REMOVE not in teardown.actions
+    first = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=machine)
+    assert first.actions == ()
+    assert first.prior_state == PRIOR_STATE_UNSET
+
+    machine.state = SnapState(installed=False, enabled=False)
+    second = plan_reconcile(enabled=True, prior_state=first.prior_state, observe=machine)
+    machine.apply(second)
+
+    assert second.actions == (ACTION_INSTALL, ACTION_CONNECT)
+    assert second.prior_state == PRIOR_STATE_ABSENT
+
+    teardown = plan_teardown(prior_state=second.prior_state, observe=machine)
+
+    assert teardown.actions == (ACTION_REMOVE,)
+
+
+def test_unknown_first_opt_in_then_a_readable_running_snap_records_enabled():
+    """The mirror case: a foreign snap keeps the restore point that protects it."""
+    machine = _FakeMachine(SnapState(installed=True, enabled=True, known=False))
+
+    first = plan_reconcile(enabled=True, prior_state=PRIOR_STATE_UNSET, observe=machine)
+    machine.state = SnapState(installed=True, enabled=True)
+    second = plan_reconcile(enabled=True, prior_state=first.prior_state, observe=machine)
+
+    assert second.prior_state == PRIOR_STATE_ENABLED
+    assert ACTION_REMOVE not in plan_teardown(prior_state=second.prior_state, observe=machine).actions
+
+
+def test_disable_path_after_an_unknown_first_opt_in_still_issues_nothing():
+    """Leaving `prior_state` unset is safe on the `false` path: nothing was done."""
+    spy = ObserveSpy(SnapState(installed=True, enabled=True))
+
+    plan = plan_reconcile(enabled=False, prior_state=PRIOR_STATE_UNSET, observe=spy)
+
+    assert plan.actions == ()
+    assert spy.calls == 0
 
 
 def test_unknown_snap_state_after_opt_in_takes_no_action_and_keeps_prior_state():
@@ -261,37 +302,83 @@ def test_unknown_snap_state_on_the_disable_path_takes_no_action():
 
 
 def test_teardown_removes_only_what_the_charm_installed():
-    assert plan_teardown(prior_state=PRIOR_STATE_ABSENT).actions == (ACTION_REMOVE,)
+    plan = plan_teardown(prior_state=PRIOR_STATE_ABSENT, observe=ObserveSpy(SnapState(installed=True, enabled=True)))
+
+    assert plan.actions == (ACTION_REMOVE,)
+    assert plan.scrape_enabled is False
 
 
 def test_teardown_redisables_what_the_charm_enabled():
-    plan = plan_teardown(prior_state=PRIOR_STATE_DISABLED)
+    plan = plan_teardown(prior_state=PRIOR_STATE_DISABLED, observe=ObserveSpy(SnapState(installed=True, enabled=True)))
 
     assert plan.actions == (ACTION_DISABLE,)
     assert ACTION_REMOVE not in plan.actions
 
 
 def test_teardown_reenables_a_preexisting_running_snap():
-    plan = plan_teardown(prior_state=PRIOR_STATE_ENABLED)
+    plan = plan_teardown(prior_state=PRIOR_STATE_ENABLED, observe=ObserveSpy(SnapState(installed=True, enabled=False)))
 
     assert plan.actions == (ACTION_ENABLE,)
     assert ACTION_REMOVE not in plan.actions
+
+
+# --- Teardown observes too: an unneeded action is an error, not a no-op ---
+
+
+def test_teardown_does_not_reenable_an_already_enabled_snap():
+    plan = plan_teardown(prior_state=PRIOR_STATE_ENABLED, observe=ObserveSpy(SnapState(installed=True, enabled=True)))
+
+    assert plan.actions == ()
+
+
+def test_teardown_does_not_enable_a_snap_that_is_no_longer_installed():
+    plan = plan_teardown(prior_state=PRIOR_STATE_ENABLED, observe=ObserveSpy(SnapState(installed=False, enabled=False)))
+
+    assert plan.actions == ()
+
+
+def test_teardown_does_not_remove_an_already_absent_snap():
+    plan = plan_teardown(prior_state=PRIOR_STATE_ABSENT, observe=ObserveSpy(SnapState(installed=False, enabled=False)))
+
+    assert plan.actions == ()
+
+
+def test_teardown_does_not_redisable_an_already_disabled_snap():
+    plan = plan_teardown(prior_state=PRIOR_STATE_DISABLED, observe=ObserveSpy(SnapState(installed=True, enabled=False)))
+
+    assert plan.actions == ()
+
+
+def test_teardown_with_unknown_snap_state_still_attempts_the_restore():
+    """Teardown is the last hook there will ever be, so best effort beats waiting."""
+    unknown = SnapState(installed=False, enabled=False, known=False)
+    expected = {
+        PRIOR_STATE_ABSENT: (ACTION_REMOVE,),
+        PRIOR_STATE_DISABLED: (ACTION_DISABLE,),
+        PRIOR_STATE_ENABLED: (ACTION_ENABLE,),
+    }
+
+    for prior, actions in expected.items():
+        plan = plan_teardown(prior_state=prior, observe=ObserveSpy(unknown))
+
+        assert plan.actions == actions, prior
 
 
 # --- The sequence that drove the design ---
 
 
 def test_preexisting_running_snap_survives_false_true_false_teardown():
-    observed = SnapState(installed=True, enabled=True)
+    machine = _FakeMachine(SnapState(installed=True, enabled=True))
     prior = PRIOR_STATE_UNSET
     seen = []
 
     for enabled in (False, True, False):
-        plan = plan_reconcile(enabled=enabled, prior_state=prior, observe=lambda: observed)
+        plan = plan_reconcile(enabled=enabled, prior_state=prior, observe=machine)
+        machine.apply(plan)
         seen.append(plan.actions)
         prior = plan.prior_state
 
-    seen.append(plan_teardown(prior_state=prior).actions)
+    seen.append(plan_teardown(prior_state=prior, observe=machine).actions)
 
     assert seen == [(), (ACTION_CONNECT,), (ACTION_DISABLE,), (ACTION_ENABLE,)]
 
@@ -394,16 +481,6 @@ def test_observe_reports_enabled_snap():
 def test_observe_reports_disabled_snap():
     with patch("src.node_exporter._run", return_value=_completed(SNAP_LIST_DISABLED)):
         assert observe() == SnapState(installed=True, enabled=False)
-
-
-def test_get_version_reads_the_version_column():
-    with patch("src.node_exporter._run", return_value=_completed(SNAP_LIST_ENABLED)):
-        assert get_version() == "v1.10.2"
-
-
-def test_get_version_is_none_when_snap_absent():
-    with patch("src.node_exporter._run", side_effect=subprocess.CalledProcessError(1, "snap")):
-        assert get_version() is None
 
 
 def test_effects_build_expected_argv():

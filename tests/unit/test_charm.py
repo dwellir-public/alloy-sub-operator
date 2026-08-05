@@ -14,6 +14,7 @@ from ops import testing
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
+import node_exporter
 from charm import AlloySubCharm, relation_urls
 from outbound_endpoints import OutboundEndpoint
 
@@ -657,6 +658,7 @@ def test_configure_restarts_alloy_when_custom_args_change():
         _has_machine_observability_relation=lambda: True,
         _reconcile_node_exporter=lambda: (False, None),
         _node_exporter_enabled=lambda: False,
+        _active_message=lambda default, *, scrape_enabled: default,
         _active_metrics_scrape_jobs=lambda payload, principal_context: [],
         _path_exclude_patterns=lambda: "",
         _global_scrape_interval=lambda: "1m",
@@ -715,6 +717,7 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         _has_machine_observability_relation=lambda: True,
         _reconcile_node_exporter=lambda: (False, None),
         _node_exporter_enabled=lambda: False,
+        _active_message=lambda default, *, scrape_enabled: default,
         _active_metrics_scrape_jobs=lambda payload, principal_context: [],
         _path_exclude_patterns=lambda: "",
         _global_scrape_interval=lambda: "1m",
@@ -773,6 +776,7 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         _has_machine_observability_relation=lambda: True,
         _reconcile_node_exporter=lambda: (False, None),
         _node_exporter_enabled=lambda: False,
+        _active_message=lambda default, *, scrape_enabled: default,
         _active_metrics_scrape_jobs=lambda payload, principal_context: [],
         _path_exclude_patterns=lambda: "",
         _global_scrape_interval=lambda: "1m",
@@ -1107,7 +1111,10 @@ def test_reconcile_node_exporter_persists_prior_state_before_applying():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False, known=True)),
+        patch(
+            "charm.node_exporter.observe",
+            return_value=node_exporter.SnapState(installed=False, enabled=False, known=True),
+        ),
         patch("charm.node_exporter.apply") as apply_mock,
     ):
         scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
@@ -1125,7 +1132,10 @@ def test_reconcile_node_exporter_records_prior_state_even_when_apply_fails():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False, known=True)),
+        patch(
+            "charm.node_exporter.observe",
+            return_value=node_exporter.SnapState(installed=False, enabled=False, known=True),
+        ),
         patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
     ):
         scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
@@ -1176,7 +1186,10 @@ def test_node_exporter_job_is_rendered_with_topology_labels():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True, known=True)),
+        patch(
+            "charm.node_exporter.observe",
+            return_value=node_exporter.SnapState(installed=True, enabled=True, known=True),
+        ),
         patch("charm.node_exporter.apply"),
         patch("charm.alloy.get_version", return_value="1.0.0"),
         patch("charm.alloy.is_active", return_value=True),
@@ -1215,7 +1228,10 @@ def test_node_exporter_only_mode_is_active_without_machine_observability():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=True, enabled=True, known=True)),
+        patch(
+            "charm.node_exporter.observe",
+            return_value=node_exporter.SnapState(installed=True, enabled=True, known=True),
+        ),
         patch("charm.node_exporter.apply"),
         patch("charm.alloy.get_version", return_value="1.0.0"),
         patch("charm.alloy.is_active", return_value=True),
@@ -1233,6 +1249,71 @@ def test_node_exporter_only_mode_is_active_without_machine_observability():
 
     assert state_out.unit_status.name == "active"
     assert "node-exporter metrics only" in state_out.unit_status.message
+
+
+def test_unreadable_snapd_does_not_claim_node_exporter_metrics():
+    """With no scrape job rendered, the status must not advertise node-exporter metrics."""
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+        ],
+        config={"enable-node-exporter": True},
+        leader=True,
+    )
+
+    with (
+        patch(
+            "charm.node_exporter.observe",
+            return_value=node_exporter.SnapState(installed=False, enabled=False, known=False),
+        ),
+        patch("charm.node_exporter.apply") as apply_mock,
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text"),
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+        patch("charm.ConfigBuilder") as builder_cls,
+    ):
+        builder_cls.return_value.build.return_value = ""
+        state_out = ctx.run(ctx.on.update_status(), state)
+
+    jobs = builder_cls.call_args.kwargs["metrics_scrape_jobs"]
+    assert [job for job in jobs if job.job_name == "node-exporter"] == []
+    assert apply_mock.call_args.args[0].actions == ()
+    assert state_out.unit_status.name == "active"
+    assert "node-exporter pending snap state" in state_out.unit_status.message
+    assert "node-exporter metrics only" not in state_out.unit_status.message
+
+
+def test_unreadable_snapd_on_first_opt_in_records_no_restore_point():
+    """Important 1: an unverifiable observation must not be written down as a restore point."""
+    fake_charm = SimpleNamespace(
+        _stored=SimpleNamespace(node_exporter_prior_state=""),
+        _node_exporter_enabled=lambda: True,
+    )
+
+    with (
+        patch(
+            "charm.node_exporter.observe",
+            return_value=node_exporter.SnapState(installed=False, enabled=False, known=False),
+        ),
+        patch("charm.node_exporter.apply"),
+    ):
+        scrape_enabled, error = AlloySubCharm._reconcile_node_exporter(fake_charm)
+
+    assert scrape_enabled is False
+    assert error is None
+    assert fake_charm._stored.node_exporter_prior_state == ""
 
 
 def test_snap_failure_blocks_but_still_writes_config():
@@ -1257,7 +1338,10 @@ def test_snap_failure_blocks_but_still_writes_config():
     )
 
     with (
-        patch("charm.node_exporter.observe", return_value=SimpleNamespace(installed=False, enabled=False, known=True)),
+        patch(
+            "charm.node_exporter.observe",
+            return_value=node_exporter.SnapState(installed=False, enabled=False, known=True),
+        ),
         patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
         patch("charm.alloy.get_version", return_value="1.0.0"),
         patch("charm.alloy.is_active", return_value=True),
@@ -1285,7 +1369,7 @@ def test_node_exporter_error_blocks_even_when_topology_is_missing():
     with (
         patch(
             "charm.node_exporter.observe",
-            return_value=SimpleNamespace(installed=False, enabled=False, known=True),
+            return_value=node_exporter.SnapState(installed=False, enabled=False, known=True),
         ),
         patch("charm.node_exporter.apply", side_effect=RuntimeError("snap store unreachable")),
         patch("charm.alloy.get_version", return_value="1.0.0"),
@@ -1339,7 +1423,7 @@ def test_disabling_node_exporter_drops_the_job_and_leaves_the_unit_active():
     with (
         patch(
             "charm.node_exporter.observe",
-            return_value=SimpleNamespace(installed=True, enabled=True, known=True),
+            return_value=node_exporter.SnapState(installed=True, enabled=True, known=True),
         ),
         patch("charm.node_exporter.apply") as apply_mock,
         patch("charm.alloy.get_version", return_value="1.0.0"),
@@ -1409,7 +1493,7 @@ def test_source_topology_charm_name_labels_the_scrape_jobs():
     assert jobs[0].targets[0].labels["juju_charm"] == "polkadot"
 
 
-def _run_remove_with_prior_state(prior_state):
+def _run_remove_with_prior_state(prior_state, observed=None):
     ctx = testing.Context(AlloySubCharm)
     state = testing.State(
         relations=[
@@ -1434,46 +1518,67 @@ def _run_remove_with_prior_state(prior_state):
         leader=True,
     )
 
+    # Default to the machine state each prior_state was recorded to protect: the
+    # snap present for `absent`, disabled for `enabled`, enabled for `disabled`.
+    if observed is None:
+        observed = node_exporter.SnapState(installed=True, enabled=prior_state != "enabled")
+
     with (
+        patch("charm.node_exporter.observe", return_value=observed) as observe_mock,
         patch("charm.node_exporter.remove") as remove_mock,
         patch("charm.node_exporter.enable") as enable_mock,
         patch("charm.node_exporter.disable") as disable_mock,
     ):
         ctx.run(ctx.on.remove(), state)
 
-    return remove_mock, enable_mock, disable_mock
+    return SimpleNamespace(
+        observe=observe_mock,
+        remove=remove_mock,
+        enable=enable_mock,
+        disable=disable_mock,
+    )
 
 
 def test_remove_removes_only_a_snap_the_charm_installed():
-    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("absent")
+    mocks = _run_remove_with_prior_state("absent")
 
-    remove_mock.assert_called_once()
-    enable_mock.assert_not_called()
-    disable_mock.assert_not_called()
+    mocks.remove.assert_called_once()
+    mocks.enable.assert_not_called()
+    mocks.disable.assert_not_called()
 
 
 def test_remove_redisables_a_snap_the_charm_enabled():
-    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("disabled")
+    mocks = _run_remove_with_prior_state("disabled")
 
-    disable_mock.assert_called_once()
-    remove_mock.assert_not_called()
-    enable_mock.assert_not_called()
+    mocks.disable.assert_called_once()
+    mocks.remove.assert_not_called()
+    mocks.enable.assert_not_called()
 
 
 def test_remove_reenables_a_preexisting_running_snap():
-    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("enabled")
+    mocks = _run_remove_with_prior_state("enabled")
 
-    enable_mock.assert_called_once()
-    remove_mock.assert_not_called()
-    disable_mock.assert_not_called()
+    mocks.enable.assert_called_once()
+    mocks.remove.assert_not_called()
+    mocks.disable.assert_not_called()
+
+
+def test_remove_does_not_reenable_a_snap_that_is_still_enabled():
+    """The common removal: nothing to restore, so nothing must be issued or logged."""
+    mocks = _run_remove_with_prior_state("enabled", node_exporter.SnapState(installed=True, enabled=True))
+
+    mocks.enable.assert_not_called()
+    mocks.remove.assert_not_called()
+    mocks.disable.assert_not_called()
 
 
 def test_remove_touches_nothing_when_never_opted_in():
-    remove_mock, enable_mock, disable_mock = _run_remove_with_prior_state("")
+    mocks = _run_remove_with_prior_state("")
 
-    remove_mock.assert_not_called()
-    enable_mock.assert_not_called()
-    disable_mock.assert_not_called()
+    mocks.observe.assert_not_called()
+    mocks.remove.assert_not_called()
+    mocks.enable.assert_not_called()
+    mocks.disable.assert_not_called()
 
 
 def test_remove_does_not_raise_when_teardown_fails():
@@ -1493,7 +1598,10 @@ def test_remove_does_not_raise_when_teardown_fails():
         leader=True,
     )
 
-    with patch("charm.node_exporter.remove", side_effect=RuntimeError("snapd is down")) as remove_mock:
+    with (
+        patch("charm.node_exporter.observe", return_value=node_exporter.SnapState(installed=True, enabled=True)),
+        patch("charm.node_exporter.remove", side_effect=RuntimeError("snapd is down")) as remove_mock,
+    ):
         ctx.run(ctx.on.remove(), state)
 
     remove_mock.assert_called_once()

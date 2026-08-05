@@ -135,7 +135,6 @@ def enable() -> None                # snap enable node-exporter
 def disable() -> None               # snap disable node-exporter
 def remove() -> None                # snap remove --purge node-exporter
 def connect_interfaces() -> None    # snap connect node-exporter:<iface> for each
-def get_version() -> str | None
 ```
 
 `connect_interfaces()` runs on fresh install *and* on enable-of-existing, so a pre-existing
@@ -162,7 +161,7 @@ class Plan:
     scrape_enabled: bool
 
 def plan_reconcile(*, enabled: bool, prior_state: str, observe: Callable[[], SnapState]) -> Plan
-def plan_teardown(*, prior_state: str) -> Plan
+def plan_teardown(*, prior_state: str, observe: Callable[[], SnapState]) -> Plan
 def apply(plan: Plan) -> None      # executes plan.actions in order
 ```
 
@@ -273,7 +272,7 @@ The resulting behaviour, returned as `(scrape_enabled, error)`:
 | prior state | observed | config `true` | config `false` |
 |---|---|---|---|
 | `""` — never opted in | *not read* | — | **nothing**, `observe` is never called |
-| `""` — never opted in | unknown | record `enabled`, no action, no scrape job | — |
+| `""` — never opted in | unknown | record nothing, no action, no scrape job; retry next hook | — |
 | `""` — never opted in | absent | record `absent`, `install` + `connect` | — |
 | `""` — never opted in | installed, disabled | record `disabled`, `enable` + `connect` | — |
 | `""` — never opted in | installed, enabled | record `enabled`, `connect` | — |
@@ -301,9 +300,15 @@ Three consequences worth naming, because each is a bug the earlier intent-driven
   nothing, so a steady-state reconcile of an installed-and-enabled snap emits `()`.
 
 An unknown observation is always the do-nothing branch, and on first opt-in it records
-`PRIOR_STATE_ENABLED` — the one restore point that can never lead to `snap remove --purge`. A
-transient snapd failure must not be able to convert a foreign, pre-existing snap into something
-the charm believes it installed.
+**nothing**: `prior_state` stays `""` and the restore point is settled by the next readable
+observation. A transient snapd failure must not be able to convert a foreign, pre-existing snap
+into something the charm believes it installed — and, equally, must not permanently label a snap
+the charm is about to install as one it found already running, which would leave node-exporter
+on the machine after unit removal. Because no action is taken on the unknown branch there is
+nothing to restore, so leaving `prior_state` unset loses no information; the `false` path
+short-circuits on `""` without observing for exactly the same reason. The invariant that
+motivated recording a value here survives: `snap remove --purge` is still reachable only from a
+positively confirmed absence.
 
 Rule 1 matters because the default is `false`. Under an unconditional "disable if installed"
 rule, merely deploying `alloy-sub` onto a machine already running node-exporter for another
@@ -343,7 +348,7 @@ node_exporter.scrape_job(
 That is the whole change at the call site — the port, job name, metrics path and scheme stay
 inside `node_exporter.py`.
 
-`topology_labels` is `principal_context.juju_labels(charm_name=payload.charm_name)` — the same
+`topology_labels` is `principal_context.juju_labels(charm_name=payload.charm_name or None)` — the same
 labels the principal's own jobs receive, so node metrics attach to the Juju unit.
 
 `ConfigBuilder` is **unchanged**. It stays a generic renderer that knows nothing about
@@ -403,7 +408,10 @@ A new handler on `self.on.remove`:
 def _on_remove(self, _: ops.RemoveEvent) -> None:
     try:
         node_exporter.apply(
-            node_exporter.plan_teardown(prior_state=self._stored.node_exporter_prior_state)
+            node_exporter.plan_teardown(
+                prior_state=self._stored.node_exporter_prior_state,
+                observe=node_exporter.observe,
+            )
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("node-exporter teardown failed: %s", exc)
@@ -422,8 +430,16 @@ unit leaves no trace. The mapping lives in `plan_teardown`; this is where the th
 
 The `enabled` row calls `enable()` rather than doing nothing, because the charm may currently
 have the snap disabled via `enable-node-exporter=false` under rule 2. Doing nothing there would
-leave a pre-existing service switched off after the charm that switched it off is gone. `enable`
-on an already-enabled snap is a no-op, so the call is safe in the common case.
+leave a pre-existing service switched off after the charm that switched it off is gone.
+
+`enable` on an already-enabled snap is **not** a no-op — it exits non-zero, exactly like every
+other snap state command — so `plan_teardown` takes an `observe` callable and emits an action
+only when the machine still needs it: `remove` only if the snap is installed, `disable` only if
+it is installed and enabled, `enable` only if it is installed and disabled. Without that, the
+common removal (snap still enabled) would log `node-exporter teardown failed` when nothing
+failed. Two cases skip the observation: `prior_state == ""` returns immediately under rule 1
+without issuing even a read-only `snap list`, and an unknown observation emits the mapped action
+anyway — teardown is the last hook this unit will ever run, so best effort beats waiting.
 
 Removing the `juju-info` relation (or the last container-scoped relation) destroys the
 subordinate unit, so Juju fires `stop` then `remove` and this runs. A snap that was already on
@@ -466,17 +482,23 @@ Rule 2, config governs after opt-in — all three record-and-act paths, then the
 
 Unknown machine state — the branch that must never guess:
 
-- `observe()` returns `known=False` on first opt-in → no actions, records
-  `PRIOR_STATE_ENABLED`, `scrape_enabled is False`.
-- `plan_teardown` after that path → `("enable",)`, never `("remove",)`.
+- `observe()` returns `known=False` on first opt-in → no actions, `prior_state` stays `""`,
+  `scrape_enabled is False`.
+- The following readable observation settles the restore point: absent → records `absent` and
+  teardown from there emits `("remove",)`; installed+enabled → records `enabled` and teardown
+  never emits `("remove",)`.
 - `known=False` after opt-in, on either the `true` or the `false` path → no actions,
   `prior_state` unchanged.
 
-Teardown, full restore — the only place the three values diverge:
+Teardown, full restore — the only place the three values diverge, and each action is emitted
+only when the observed machine still needs it:
 
-- `absent` → `("remove",)`
-- `disabled` → `("disable",)`
-- `enabled` → `("enable",)`, not `("remove",)` and not empty
+- `absent`, observed installed → `("remove",)`; observed absent → `()`
+- `disabled`, observed installed+enabled → `("disable",)`; observed installed+disabled → `()`
+- `enabled`, observed installed+disabled → `("enable",)`, never `("remove",)`; observed
+  installed+enabled or absent → `()`
+- `prior_state=""` → `()` and the `observe` spy is never called
+- `known=False` → the mapped action is emitted anyway, best effort, there is no next hook
 
 Sequence tests, threading `prior_state` (and, where it matters, the machine's actual state)
 through each step:
@@ -501,7 +523,6 @@ topology labels it was handed.
   `known=False`.
 - A failed snap command's exception message carries snapd's own stderr, not just the exit status.
 - `connect_interfaces` attempts all four interfaces and continues past one failure.
-- `get_version` parses real `snap list` output and returns `None` when the snap is absent.
 - `apply()` dispatches each action name to the matching effect, in order.
 
 ### `tests/unit/test_charm.py` (additions) — wiring only
@@ -513,8 +534,12 @@ topology labels it was handed.
 - Snap failure with no topology available → Blocked on the snap error, not Waiting.
 - Enabled, then set back to `false` → the `node-exporter` job is dropped from
   `metrics_scrape_jobs` and the unit is Active, not Blocked.
-- `on.remove` calls `apply(plan_teardown(...))` with the stored `prior_state`.
+- `on.remove` calls `apply(plan_teardown(...))` with the stored `prior_state` and the real
+  `observe`, so a snap that is still enabled is left alone instead of failing an `enable`.
 - `juju-info` only, no `machine-observability`, enabled → Active.
+- `juju-info` only, no `machine-observability`, enabled, snapd unreadable → Active with
+  `node-exporter pending snap state`, and no `node-exporter` job in `metrics_scrape_jobs`:
+  the status must not advertise metrics that are not being scraped.
 - No `juju-info`, v2 payload with `source_topology` → Active with topology labels from the
   payload.
 - No `juju-info`, v1 payload → Waiting.

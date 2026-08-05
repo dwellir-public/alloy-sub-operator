@@ -220,7 +220,12 @@ class AlloySubCharm(ops.CharmBase):
     def _on_remove(self, _: ops.RemoveEvent) -> None:
         """Restore the snap state the charm originally found before the unit goes away."""
         try:
-            node_exporter.apply(node_exporter.plan_teardown(prior_state=self._stored.node_exporter_prior_state))
+            node_exporter.apply(
+                node_exporter.plan_teardown(
+                    prior_state=self._stored.node_exporter_prior_state,
+                    observe=node_exporter.observe,
+                )
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("node-exporter teardown failed: %s", exc)
 
@@ -367,10 +372,19 @@ class AlloySubCharm(ops.CharmBase):
                 self._status_message(self._relation_waiting_message(waiting_requirements))
             )
             return False
-        if not self._has_machine_observability_relation():
-            active_message = "node-exporter metrics only"
+        active_message = self._active_message(active_message, scrape_enabled=scrape_enabled)
         self.unit.status = ops.ActiveStatus(self._status_message(f"config valid; {active_message}"))
         return True
+
+    def _active_message(self, default: str, *, scrape_enabled: bool) -> str:
+        """Return the active-status message for the currently rendered config."""
+        if self._node_exporter_enabled() and not scrape_enabled:
+            # snapd could not be read, so no node-exporter job was rendered. Claiming
+            # node-exporter metrics here would advertise a scrape that does not exist.
+            return "node-exporter pending snap state"
+        if not self._has_machine_observability_relation():
+            return "node-exporter metrics only"
+        return default
 
     def _reconcile_node_exporter(self) -> tuple[bool, str | None]:
         """Bring the node-exporter snap in line with config; return (scrape_enabled, error)."""
