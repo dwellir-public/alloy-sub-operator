@@ -122,6 +122,64 @@ Expected result:
 - the Grafana Cloud Loki endpoint is rendered with `basic_auth`
 - if plain upstream relations also exist, Alloy renders both sets of endpoints
 
+## node-exporter
+
+Set `enable-node-exporter=true` to have the subordinate manage the Canonical
+`node-exporter` snap on the principal's machine and scrape it into Alloy:
+
+```bash
+juju config alloy-sub enable-node-exporter=true
+```
+
+The charm installs the snap if it is missing, connects `hardware-observe`,
+`mount-observe`, `network-observe`, and `system-observe`, and renders a
+`node-exporter` scrape job against `localhost:9100` carrying the principal's
+Juju topology labels, so host metrics attribute to the correct Juju unit.
+
+### Ownership rules
+
+Two rules govern what the charm will touch:
+
+1. **Until you set `enable-node-exporter=true` at least once, the charm issues no
+   snap command at all.** Deploying `alloy-sub` with the default onto a machine
+   that already runs node-exporter changes nothing.
+2. **After you have set it to `true` once, the config governs in both
+   directions.** Setting it back to `false` disables the snap, even if the snap
+   was already running before the charm arrived.
+
+On unit removal the charm restores exactly what it first found: a snap it
+installed is removed, a snap it enabled is disabled again, and a snap that was
+already running is left running.
+
+Because rule 2 takes effect from the first `true`, `true` → `false` is not the
+same as never having enabled it. To make the charm stop managing a pre-existing
+snap entirely, remove the unit — that triggers the full restore.
+
+Verify on the principal machine:
+
+```bash
+juju ssh <principal-unit> 'snap list node-exporter'
+juju ssh <principal-unit> 'grep -n "node_exporter" -A12 /etc/alloy/config.alloy'
+```
+
+## Topology Without juju-info
+
+Juju never creates the `juju-info` relation automatically, and a subordinate is
+co-located by *any* container-scoped relation. Relating only
+`machine-observability` therefore gives you a running `alloy-sub` unit with no
+`juju-info`.
+
+`alloy-sub` handles that: when `juju-info` is absent it derives Juju topology
+from the v2 payload's `source_topology` block. `juju-info` remains the source of
+truth when it is present.
+
+A v1 principal with no `juju-info` has no topology anywhere, so the unit stays in
+`WaitingStatus`. Relate `juju-info` explicitly in that case:
+
+```bash
+juju integrate alloy-sub:juju-info <principal>
+```
+
 ## Validation Flow
 
 Deploy the subordinate and principal, relate both relation endpoints, then inspect

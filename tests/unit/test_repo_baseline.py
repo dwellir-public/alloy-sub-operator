@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 def test_developing_doc_exists():
     assert Path("DEVELOPING.md").exists()
@@ -69,7 +71,17 @@ def test_architecture_doc_describes_subordinate_responsibilities():
 
 
 def test_charmcraft_declares_node_exporter_option():
-    charmcraft = Path("charmcraft.yaml").read_text()
+    charmcraft = yaml.safe_load(Path("charmcraft.yaml").read_text())
 
-    assert "enable-node-exporter:" in charmcraft
-    assert "type: boolean" in charmcraft
+    option = charmcraft["config"]["options"]["enable-node-exporter"]
+
+    assert option["type"] == "boolean"
+    assert option["default"] is False
+
+
+def test_readme_documents_node_exporter():
+    readme = Path("README.md").read_text()
+
+    assert "## node-exporter" in readme
+    assert "enable-node-exporter" in readme
+    assert "source_topology" in readme
