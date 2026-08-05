@@ -183,6 +183,16 @@ def test_observe_reports_absent_when_snap_list_exits_nonzero():
         assert observe() == SnapState(installed=False, enabled=False)
 
 
+def test_observe_reports_absent_when_snap_binary_not_found():
+    with patch("src.node_exporter._run", side_effect=FileNotFoundError()):
+        assert observe() == SnapState(installed=False, enabled=False)
+
+
+def test_observe_reports_absent_when_snap_command_times_out():
+    with patch("src.node_exporter._run", side_effect=subprocess.TimeoutExpired(cmd="snap", timeout=60)):
+        assert observe() == SnapState(installed=False, enabled=False)
+
+
 def test_observe_reports_enabled_snap():
     with patch("src.node_exporter._run", return_value=_completed(SNAP_LIST_ENABLED)):
         assert observe() == SnapState(installed=True, enabled=True)
@@ -226,6 +236,15 @@ def test_connect_interfaces_connects_every_required_interface():
 
 def test_connect_interfaces_continues_past_a_failed_connection():
     outcomes = [subprocess.CalledProcessError(1, "snap"), _completed(), _completed(), _completed()]
+
+    with patch("src.node_exporter._run", side_effect=outcomes) as run_mock:
+        connect_interfaces()
+
+    assert run_mock.call_count == len(REQUIRED_INTERFACES)
+
+
+def test_connect_interfaces_continues_past_a_file_not_found_error():
+    outcomes = [FileNotFoundError(), _completed(), _completed(), _completed()]
 
     with patch("src.node_exporter._run", side_effect=outcomes) as run_mock:
         connect_interfaces()
