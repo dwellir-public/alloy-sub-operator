@@ -10,7 +10,16 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+try:
+    from .config_builder import MetricsScrapeJob, ScrapeTarget
+except ImportError:
+    from config_builder import MetricsScrapeJob, ScrapeTarget
+
 SNAP_NAME = "node-exporter"
+DEFAULT_PORT = 9100
+JOB_NAME = "node-exporter"
+METRICS_PATH = "/metrics"
+SCHEME = "http"
 
 ACTION_INSTALL = "install"
 ACTION_ENABLE = "enable"
@@ -190,3 +199,20 @@ def apply(plan: Plan) -> None:
             remove()
         elif action == ACTION_CONNECT:
             connect_interfaces()
+
+
+def scrape_job(
+    *,
+    topology_labels: dict[str, str],
+    scrape_interval: str,
+    scrape_timeout: str,
+) -> MetricsScrapeJob:
+    """Build the Alloy scrape job for the local node-exporter."""
+    return MetricsScrapeJob(
+        job_name=JOB_NAME,
+        targets=[ScrapeTarget(address=f"localhost:{DEFAULT_PORT}", labels=dict(topology_labels))],
+        metrics_path=METRICS_PATH,
+        scheme=SCHEME,
+        scrape_interval=scrape_interval,
+        scrape_timeout=scrape_timeout,
+    )
