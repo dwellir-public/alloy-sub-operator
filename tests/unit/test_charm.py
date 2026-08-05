@@ -1001,3 +1001,92 @@ def test_removing_last_sink_keeps_active_for_declared_metrics_after_loki_then_re
     assert harness.model.unit.status == testing.ActiveStatus(
         "Alloy service running; config valid; Alloy config updated"
     )
+
+
+SOURCE_TOPOLOGY = {
+    "model": "payload-model",
+    "model_uuid": "payload-uuid",
+    "application": "reference",
+    "unit": "reference/0",
+    "charm_name": "reference-charm",
+}
+
+
+def test_principal_context_falls_back_to_source_topology_without_juju_info():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="reference",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        schema_version=2,
+                        charm_name="reference-charm",
+                        source_topology=SOURCE_TOPOLOGY,
+                    )
+                },
+            ),
+        ],
+        leader=True,
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        context = manager.charm._principal_context()
+
+    assert context is not None
+    assert context.application == "reference"
+    assert context.unit == "reference/0"
+    assert context.model == "payload-model"
+
+
+def test_principal_context_prefers_juju_info_over_source_topology():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        schema_version=2,
+                        charm_name="reference-charm",
+                        source_topology=SOURCE_TOPOLOGY,
+                    )
+                },
+            ),
+        ],
+        leader=True,
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        context = manager.charm._principal_context()
+
+    assert context is not None
+    assert context.application == "polkadot"
+
+
+def test_principal_context_is_none_for_v1_payload_without_juju_info():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload()},
+            ),
+        ],
+        leader=True,
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        assert manager.charm._principal_context() is None

@@ -407,15 +407,22 @@ class AlloySubCharm(ops.CharmBase):
             tmp_path.unlink(missing_ok=True)
 
     def _principal_context(self) -> PrincipalContext | None:
-        """Return principal context from the subordinate attachment relation."""
+        """Return principal context from juju-info, falling back to v2 source topology."""
         relation = self.model.get_relation("juju-info")
-        if relation is None or not relation.units:
-            return None
-        return PrincipalContext.from_relation(
-            relation,
-            model_name=self.model.name,
-            model_uuid=self.model.uuid,
-        )
+        if relation is not None and relation.units:
+            return PrincipalContext.from_relation(
+                relation,
+                model_name=self.model.name,
+                model_uuid=self.model.uuid,
+            )
+        topology = self._observability_payload().source_topology
+        if topology is not None:
+            return PrincipalContext.from_source_topology(
+                topology,
+                model_name=self.model.name,
+                model_uuid=self.model.uuid,
+            )
+        return None
 
     def _observability_payload(self):
         """Return the current machine-observability payload if present."""
