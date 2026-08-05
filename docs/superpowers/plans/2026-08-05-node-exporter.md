@@ -1514,8 +1514,10 @@ def test_remove_does_not_raise_when_teardown_fails():
         leader=True,
     )
 
-    with patch("charm.node_exporter.remove", side_effect=RuntimeError("snapd is down")):
+    with patch("charm.node_exporter.remove", side_effect=RuntimeError("snapd is down")) as remove_mock:
         ctx.run(ctx.on.remove(), state)
+
+    remove_mock.assert_called_once()
 ```
 
 Both `testing.StoredState(name="_stored", owner_path="AlloySubCharm", content=...)` and `ctx.on.remove()` were verified against the `ops` version pinned in this repo — seeding `_stored` this way reads back correctly inside the handler.
