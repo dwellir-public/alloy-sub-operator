@@ -6,9 +6,9 @@ Add an `enable-node-exporter` config option to `alloy-sub`. When enabled, the ch
 (or re-enables) the Canonical `node-exporter` snap on the principal's machine, connects the
 snap interfaces needed for full hardware and OS metrics, and renders an Alloy scrape job that
 forwards those metrics with the principal's Juju topology labels. When disabled, the scrape job
-is dropped and the charm restores whatever snap state it found before it first acted. When the
-subordinate unit is torn down, a snap the charm installed is removed; anything pre-existing is
-left as the charm found it.
+is dropped and the snap is disabled — but only if the operator had previously enabled it,
+because until then the charm has no mandate to touch the machine at all. When the subordinate
+unit is torn down, the charm restores the exact snap state it originally found.
 
 Delivering this correctly requires first closing a latent gap: `alloy-sub` derives Juju
 topology exclusively from the `juju-info` relation, which Juju never creates automatically.
@@ -28,8 +28,9 @@ That gap is in scope here because node-exporter metrics are worthless without to
   Operators can set those directly on the snap. Revisit if a real need appears.
 - Do not make the scrape port configurable. The snap listens on 9100.
 - Do not migrate Alloy itself from APT to snap.
-- Do not remove, disable, or otherwise alter a node-exporter snap that was already installed and
-  running before the charm first acted on it.
+- Do not issue any snap command until the operator has set `enable-node-exporter=true` at least
+  once. A charm that has never been opted in leaves the machine untouched.
+- Do not leave the machine altered after unit removal.
 - Do not add TLS or authentication to the local node-exporter scrape.
 
 ## Background
@@ -143,9 +144,11 @@ enable-node-exporter:
     Install and enable the node-exporter snap on the principal machine and scrape its
     metrics with the principal's Juju topology labels.
 
-    When false, the scrape job is removed from the Alloy config and the charm restores
-    whatever snap state it found before it first acted. A node-exporter that was already
-    installed and running before this charm touched it is left alone.
+    When false, the scrape job is removed from the Alloy config and the snap is disabled,
+    provided this charm had previously enabled it. A node-exporter this charm has never
+    enabled is left untouched, so deploying with the default changes nothing.
+
+    On unit removal the charm restores the snap state it originally found.
   type: boolean
   default: false
 ```
@@ -158,32 +161,47 @@ test stays green without modification.
 `_stored` gains `node_exporter_prior_state: str`, one of `""` (the charm has never acted on the
 snap), `"absent"`, `"disabled"`, or `"enabled"`. It is written exactly once — the first time
 reconcile runs with the config `true` — and records the snap state the charm found before it
-changed anything. It is the sole authority for both the `false` path and teardown.
+changed anything.
 
-A single boolean would not be enough. If the snap was pre-existing but *disabled* and the charm
-enabled it, flipping back to `false` should re-disable it, because the charm caused that state.
-"Did we install it" cannot express that; "what did we find" can.
+Two rules govern everything, and it is worth stating them separately because they answer
+different questions:
+
+1. **Opt-in gate.** Until the operator has set `enable-node-exporter=true` at least once, the
+   charm issues no snap command whatsoever. `prior_state == ""` means no consent has been
+   given.
+2. **Config governs after opt-in.** Once `true` has been set, the operator has handed the snap
+   to the charm. From then on `true` means enabled and `false` means disabled, regardless of
+   what was on the machine first.
+
+`prior_state` is not an ownership flag; it is a restore point. It records what to put back at
+teardown, and its emptiness is what implements rule 1.
 
 New `_reconcile_node_exporter() -> tuple[bool, str | None]` returns `(scrape_enabled, error)`:
 
 | prior state | config `true` | config `false` |
 |---|---|---|
-| `""` — never touched | record prior state, then act per the row it lands on | **nothing** |
+| `""` — never opted in | record prior state, then act per the row it lands on | **nothing** |
 | `absent` — we installed it | `connect_interfaces()` | `disable()` |
 | `disabled` — we enabled it | `connect_interfaces()` | `disable()` |
-| `enabled` — already running | `connect_interfaces()` | **leave alone** |
+| `enabled` — already running | `connect_interfaces()` | `disable()` |
 
 Recording plus first action, for the `""` row: `absent` → `install()` then
 `connect_interfaces()`; `disabled` → `enable()` then `connect_interfaces()`; `enabled` →
 `connect_interfaces()` only.
 
-The governing invariant: **the charm never leaves the snap in a state the operator did not ask
-for, and never touches a snap it never enabled.**
+After opt-in the three non-empty rows behave identically for config purposes. They diverge only
+at teardown, which is the sole reason the distinction is stored at all.
 
-This matters because the default is `false`. Under an unconditional "disable if installed"
+Rule 1 matters because the default is `false`. Under an unconditional "disable if installed"
 rule, merely deploying `alloy-sub` onto a machine already running node-exporter for another
 consumer would disable it before the operator touched any config. The `""` row makes a
 default-config deployment a genuine no-op.
+
+Rule 2 matters because the alternative — the charm only ever undoing its own changes — makes
+`enable-node-exporter=false` a permanent no-op on any machine where node-exporter happened to
+be running first. The operator would have a config option reading `false` next to a running
+node-exporter and no charm-level way to stop it. Setting `true` is the consent; after that the
+option must work in both directions.
 
 It is called at the **top of `_configure()`**, before any early return, so the `false` path runs
 regardless of relation state.
@@ -265,16 +283,20 @@ def _on_remove(self, _: ops.RemoveEvent) -> None:
     self._restore_node_exporter_prior_state()
 ```
 
-Teardown restores the same recorded prior state, with one difference from the config `false`
-path: an `absent` prior state means the charm installed the snap, and unit removal is the point
-at which it is removed rather than merely disabled.
+Teardown is a full restore: put the machine back exactly as the charm found it, so removing the
+unit leaves no trace. This is where the three non-empty `prior_state` values finally differ.
 
 | prior state | teardown action |
 |---|---|
-| `""` — never touched | nothing |
+| `""` — never opted in | nothing |
 | `absent` — we installed it | `snap remove --purge` |
 | `disabled` — we enabled it | `disable()` |
-| `enabled` — already running | leave alone |
+| `enabled` — already running | `enable()` |
+
+The `enabled` row calls `enable()` rather than doing nothing, because the charm may currently
+have the snap disabled via `enable-node-exporter=false` under rule 2. Doing nothing there would
+leave a pre-existing service switched off after the charm that switched it off is gone. `enable`
+on an already-enabled snap is a no-op, so the call is safe in the common case.
 
 Removing the `juju-info` relation (or the last container-scoped relation) destroys the
 subordinate unit, so Juju fires `stop` then `remove` and this runs. A snap that was already on
@@ -306,17 +328,30 @@ Failures are logged, not raised — a failing teardown must not wedge unit remov
 - `juju-info` present and `source_topology` also present → `juju-info` wins.
 - Snap install failure → Blocked, but the rest of the config is still written.
 
-Prior-state matrix, one test per cell — these are the cells that protect a foreign snap:
+Prior-state matrix, one test per cell:
+
+Rule 1, the opt-in gate:
 
 - config `false`, `prior_state=""`, snap installed and running → **no snap command is issued at
   all**, and no node-exporter job is rendered. This is the default-deployment no-op.
+- `remove`, `prior_state=""` → no snap command.
+
+Rule 2, config governs after opt-in:
+
 - config `false`, `prior_state="absent"` → `disable()`, not `remove()`.
 - config `false`, `prior_state="disabled"` → `disable()`.
-- config `false`, `prior_state="enabled"` → no snap command.
+- config `false`, `prior_state="enabled"` → `disable()`.
+
+Teardown, full restore:
+
 - `remove`, `prior_state="absent"` → `snap remove --purge`.
 - `remove`, `prior_state="disabled"` → `disable()`, not `remove()`.
-- `remove`, `prior_state="enabled"` → no snap command.
-- `remove`, `prior_state=""` → no snap command.
+- `remove`, `prior_state="enabled"` → `enable()`, not `remove()`.
+
+End-to-end sequence, since this is the case that drove the design — snap pre-installed and
+running, then `false` → `true` → `false` → unit removed. Assert: no command, then
+`connect_interfaces()` only, then `disable()`, then `enable()`. The machine ends where it
+started.
 
 ### `tests/unit/test_repo_baseline.py` (addition)
 
@@ -350,6 +385,12 @@ slice; the snap path needs a real machine and is verified manually per the READM
   charm would read `""` and take no snap action on either the `false` path or teardown, leaving
   the snap installed and running. That is the safe failure direction: the charm errs toward
   leaving the machine alone rather than toward disabling or removing something.
+- **Opt-in is irreversible within a unit's lifetime.** Once `true` has been set, `prior_state`
+  is recorded and the charm will act on the snap for the rest of the unit's life, including
+  disabling a node-exporter that was serving another consumer. This is deliberate under rule 2,
+  but it means `true` → `false` is not the same as never having enabled it. An operator who
+  wants the charm to stop managing an existing snap entirely must remove the unit, which
+  triggers the full restore.
 - **Prior state is recorded once, not continuously.** If an operator manually disables the snap
   while the charm has it enabled, the charm re-enables it on the next reconcile. That is
   intended — config is the declared intent — but it means `snap disable` by hand is not a
