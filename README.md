@@ -124,10 +124,10 @@ Expected result:
 
 ## Host metrics (node-exporter)
 
-Set `enable-node-exporter=true` to collect host-level metrics:
+Set `enable-host-metrics=true` to collect host-level metrics:
 
 ```bash
-juju config alloy-sub enable-node-exporter=true
+juju config alloy-sub enable-host-metrics=true
 ```
 
 Alloy embeds node_exporter as its `prometheus.exporter.unix` component, so this
@@ -146,8 +146,8 @@ Two behaviours worth knowing:
 - The job scrapes every 15s regardless of `global_scrape_interval`; only
   `global_scrape_timeout` applies. Host metrics are cheap and their value is in
   the resolution.
-- `enable-node-exporter=true` is a complete pipeline by itself. With it set, the
-  charm renders config and reports `node-exporter metrics only` without the
+- `enable-host-metrics=true` is a complete pipeline by itself. With it set, the
+  charm renders config and reports `host metrics only` without the
   `machine-observability` relation.
 
 Default collectors emit roughly a thousand series per host. Leave this off where

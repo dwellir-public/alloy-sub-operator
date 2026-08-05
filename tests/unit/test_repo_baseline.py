@@ -24,11 +24,11 @@ def test_charmcraft_uses_uv_baseline():
     assert "ubuntu@24.04:amd64:" in charmcraft
 
 
-def test_charmcraft_declares_the_node_exporter_option():
+def test_charmcraft_declares_the_host_metrics_option():
     """An undeclared option is unsettable, so the charm would read False forever."""
     charmcraft = Path("charmcraft.yaml").read_text()
 
-    assert "enable-node-exporter:" in charmcraft
+    assert "enable-host-metrics:" in charmcraft
     assert "type: boolean" in charmcraft
 
 

@@ -660,7 +660,7 @@ def test_configure_restarts_alloy_when_custom_args_change():
         _queue_size=lambda: 1000,
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
-        _node_exporter_enabled=lambda: False,
+        _host_metrics_enabled=lambda: False,
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -718,7 +718,7 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         _queue_size=lambda: 1000,
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
-        _node_exporter_enabled=lambda: False,
+        _host_metrics_enabled=lambda: False,
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -776,7 +776,7 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         _queue_size=lambda: 1000,
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
-        _node_exporter_enabled=lambda: False,
+        _host_metrics_enabled=lambda: False,
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -1121,7 +1121,7 @@ def _host_metrics_state(*, enabled, with_machine_observability=True):
                 remote_app_data={"payload": _machine_observability_payload()},
             )
         )
-    return testing.State(relations=relations, config={"enable-node-exporter": enabled})
+    return testing.State(relations=relations, config={"enable-host-metrics": enabled})
 
 
 def _run_and_capture_config(state):
@@ -1143,7 +1143,7 @@ def _run_and_capture_config(state):
     return state_out, write_config.call_args[0][0]
 
 
-def test_enable_node_exporter_renders_the_builtin_unix_exporter():
+def test_enable_host_metrics_renders_the_builtin_unix_exporter():
     _, config = _run_and_capture_config(_host_metrics_state(enabled=True))
 
     assert 'prometheus.exporter.unix "node" {' in config
@@ -1152,29 +1152,27 @@ def test_enable_node_exporter_renders_the_builtin_unix_exporter():
     assert "  forward_to = [prometheus.remote_write.metrics.receiver]" in config
 
 
-def test_enable_node_exporter_labels_host_metrics_with_juju_topology():
+def test_enable_host_metrics_labels_them_with_juju_topology():
     _, config = _run_and_capture_config(_host_metrics_state(enabled=True))
 
     assert '    target_label = "juju_unit"' in config
     assert '    replacement  = "polkadot/0"' in config
 
 
-def test_node_exporter_off_by_default_renders_no_exporter():
+def test_host_metrics_off_by_default_renders_no_exporter():
     _, config = _run_and_capture_config(_host_metrics_state(enabled=False))
 
     assert "prometheus.exporter.unix" not in config
 
 
-def test_node_exporter_alone_configures_without_machine_observability():
+def test_host_metrics_alone_configures_without_machine_observability():
     state_out, config = _run_and_capture_config(_host_metrics_state(enabled=True, with_machine_observability=False))
 
     assert 'prometheus.exporter.unix "node" {' in config
-    assert state_out.unit_status == testing.ActiveStatus(
-        "Alloy service running; config valid; node-exporter metrics only"
-    )
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; host metrics only")
 
 
-def test_no_machine_observability_and_no_node_exporter_still_waits():
+def test_no_machine_observability_and_no_host_metrics_still_waits():
     ctx = testing.Context(AlloySubCharm)
     with (
         patch("charm.alloy.start"),

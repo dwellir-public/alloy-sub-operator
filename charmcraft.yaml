@@ -63,7 +63,7 @@ config:
         endpoints take precedence.
       type: string
       default: "10s"
-    enable-node-exporter:
+    enable-host-metrics:
       description: |
         Collect host-level metrics using Alloy's built-in node_exporter
         (prometheus.exporter.unix). No process is installed on the machine and no

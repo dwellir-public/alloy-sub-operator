@@ -272,7 +272,7 @@ class AlloySubCharm(ops.CharmBase):
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
             return False
-        if not self._has_machine_observability_relation() and not self._node_exporter_enabled():
+        if not self._has_machine_observability_relation() and not self._host_metrics_enabled():
             # Host metrics alone are enough to render a useful config, so the
             # relation is only required when nothing else would be collected.
             self._reset_config_for_missing_relations()
@@ -316,7 +316,7 @@ class AlloySubCharm(ops.CharmBase):
                     topology_labels=topology_labels,
                     scrape_timeout=self._global_scrape_timeout(),
                 )
-                if self._node_exporter_enabled()
+                if self._host_metrics_enabled()
                 else None
             ),
         )
@@ -355,7 +355,7 @@ class AlloySubCharm(ops.CharmBase):
         if not self._has_machine_observability_relation():
             # Only host metrics are being collected; saying more would advertise
             # workload telemetry that nothing is producing.
-            return "node-exporter metrics only"
+            return "host metrics only"
         return default
 
     @staticmethod
@@ -384,7 +384,7 @@ class AlloySubCharm(ops.CharmBase):
         missing_relations: list[str] = []
         if principal_context is None:
             missing_relations.append("juju-info relation")
-        if not self._has_machine_observability_relation() and not self._node_exporter_enabled():
+        if not self._has_machine_observability_relation() and not self._host_metrics_enabled():
             # Host metrics are a complete pipeline on their own, so the relation
             # is only outstanding when nothing else would be collected.
             missing_relations.append("machine-observability relation")
@@ -572,9 +572,9 @@ class AlloySubCharm(ops.CharmBase):
         """Return whether scrape TLS verification should be skipped."""
         return bool(self.config.get("tls_insecure_skip_verify", False))
 
-    def _node_exporter_enabled(self) -> bool:
+    def _host_metrics_enabled(self) -> bool:
         """Return whether host metrics should be collected."""
-        return bool(self.config.get("enable-node-exporter", False))
+        return bool(self.config.get("enable-host-metrics", False))
 
     def _queue_size(self) -> int:
         """Return queue size for outbound telemetry buffering."""
