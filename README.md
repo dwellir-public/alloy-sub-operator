@@ -122,43 +122,24 @@ Expected result:
 - the Grafana Cloud Loki endpoint is rendered with `basic_auth`
 - if plain upstream relations also exist, Alloy renders both sets of endpoints
 
-## Host metrics (node-exporter)
+## Host metrics
 
-Set `enable-host-metrics=true` to collect host-level metrics:
+Set `enable-host-metrics=true` to collect host-level metrics, labelled with the
+principal's Juju topology so they attribute to the correct unit:
 
 ```bash
 juju config alloy-sub enable-host-metrics=true
 ```
 
-Alloy embeds node_exporter as its `prometheus.exporter.unix` component, so this
-installs nothing on the machine, starts no second process, and opens no port.
-The charm renders three blocks: the exporter, a `discovery.relabel` that attaches
-the principal's Juju topology labels, and a `prometheus.scrape` that forwards to
-remote write. Host metrics therefore attribute to the correct Juju unit.
-
-Because the exporter runs inside Alloy, the charm owns no host state here. There
-is nothing to install, restore, or clean up on unit removal, and a pre-existing
-node-exporter on the machine is unaffected — the charm neither reads nor touches
-it.
-
-Two behaviours worth knowing:
+Alloy collects these itself, so nothing is installed on the machine and no port
+is opened. Any node-exporter already on the host is left alone.
 
 - The job scrapes every 15s regardless of `global_scrape_interval`; only
-  `global_scrape_timeout` applies. Host metrics are cheap and their value is in
-  the resolution.
-- `enable-host-metrics=true` is a complete pipeline by itself. With it set, the
-  charm renders config and reports `host metrics only` without the
-  `machine-observability` relation.
+  `global_scrape_timeout` applies.
+- This is a complete pipeline on its own. With it set, the charm renders config
+  and reports `host metrics only` without the `machine-observability` relation.
 
-Default collectors emit roughly a thousand series per host. Leave this off where
-remote write volume is a concern — that is the one real reason to want it off,
-which is why it defaults to `false`.
-
-Verify on the principal machine:
-
-```bash
-juju ssh <principal-unit> 'grep -n "prometheus.exporter.unix" -A20 /etc/alloy/config.alloy'
-```
+It defaults to `false`
 
 ## Validation Flow
 

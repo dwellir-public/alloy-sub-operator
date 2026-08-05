@@ -35,8 +35,8 @@ def test_charmcraft_declares_the_host_metrics_option():
 def test_readme_documents_host_metrics():
     readme = Path("README.md").read_text()
 
-    assert "## Host metrics (node-exporter)" in readme
-    assert "prometheus.exporter.unix" in readme
+    assert "## Host metrics" in readme
+    assert "enable-host-metrics=true" in readme
 
 
 def test_pyproject_has_uv_style_dependency_groups():
