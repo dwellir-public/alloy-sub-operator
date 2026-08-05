@@ -17,7 +17,8 @@ That gap is in scope here because node-exporter metrics are worthless without to
 ## Goals
 
 - Give operators a one-flag path to host-level metrics attributed to the correct Juju unit.
-- Keep node-exporter management isolated from the existing Alloy APT workload path.
+- Keep node-exporter management isolated from the existing Alloy APT workload path, and
+  self-contained in one module so `charm.py` gains glue rather than logic.
 - Make the charm useful when only `machine-observability` is related, which is the deployment
   shape operators actually hit.
 - Leave existing deployments byte-identical on refresh until the operator opts in.
@@ -109,16 +110,26 @@ the existing test seam where three tests in `tests/unit/test_charm.py` patch
 
 ### Section 1: `src/node_exporter.py`
 
-A new module mirroring the shape of `src/alloy.py`: module-level functions over `subprocess`,
-patched in tests as `charm.node_exporter.*`.
+**All node-exporter knowledge lives in this one module.** The charm holds no snap names, no
+ports, no interface lists, and no state-machine branches. `src/charm.py` gains roughly twenty
+lines of glue and nothing else.
+
+The module is internally split into three layers, following the repo's existing convention of
+small focused modules of near-pure functions (`custom_args.py`, `outbound_endpoints.py`,
+`grafanacloud_connectivity.py`) with `charm.py` as the orchestrator.
+
+#### Layer 1 — constants and effects
+
+Module-level functions over `subprocess`, mirroring the shape of `src/alloy.py`:
 
 ```python
 SNAP_NAME = "node-exporter"
 DEFAULT_PORT = 9100
+JOB_NAME = "node-exporter"
+METRICS_PATH = "/metrics"
 REQUIRED_INTERFACES = ("hardware-observe", "mount-observe", "network-observe", "system-observe")
 
-def is_installed() -> bool          # snap list node-exporter
-def is_enabled() -> bool            # "disabled" absent from the snap list Notes column
+def observe() -> SnapState          # one `snap list node-exporter` call
 def install() -> None               # snap install node-exporter
 def enable() -> None                # snap enable node-exporter
 def disable() -> None               # snap disable node-exporter
@@ -132,6 +143,50 @@ install also gets its interfaces wired. `snap connect` on an already-connected i
 no-op. A single failed connect logs a warning and continues to the next interface — partial
 metrics beat no metrics, and a missing interface on an older snap revision must not block the
 charm.
+
+#### Layer 2 — the decision, as pure functions
+
+```python
+@dataclass(frozen=True)
+class SnapState:
+    installed: bool
+    enabled: bool
+
+@dataclass(frozen=True)
+class Plan:
+    actions: tuple[str, ...]   # ordered subset of "install"|"enable"|"disable"|"remove"|"connect"
+    prior_state: str           # value to persist back into StoredState
+    scrape_enabled: bool
+
+def plan_reconcile(*, enabled: bool, prior_state: str, observe: Callable[[], SnapState]) -> Plan
+def plan_teardown(*, prior_state: str) -> Plan
+def apply(plan: Plan) -> None      # executes plan.actions in order
+```
+
+`plan_reconcile` takes `observe` as a **callable, not a value**, and invokes it only when it
+needs it. This is what makes rule 1 literal rather than approximate: when `prior_state == ""`
+and `enabled` is `False`, the planner returns an empty plan without ever calling `observe`, so
+the charm issues no `snap` invocation of any kind — not even a read-only `snap list`. The test
+for that cell passes a spy and asserts it was never called.
+
+Separating the decision from the effects is the point of the layer split. The entire
+`prior_state` matrix becomes pure-function tests over a frozen dataclass — no subprocess mocks,
+no `ops.testing` harness, no charm instantiation. Given that this state machine is where the
+real complexity sits, it should be the cheapest thing in the codebase to test exhaustively.
+
+#### Layer 3 — the scrape job
+
+```python
+def scrape_job(*, topology_labels: dict[str, str], scrape_interval: str, scrape_timeout: str) -> MetricsScrapeJob
+```
+
+Returns the fully formed `MetricsScrapeJob` targeting `localhost:9100`. `JOB_NAME`,
+`METRICS_PATH`, `DEFAULT_PORT`, and the `http` scheme stay here rather than being spelled out at
+the call site in `charm.py`.
+
+This makes `node_exporter.py` import `MetricsScrapeJob` and `ScrapeTarget` from
+`config_builder.py`. That dependency is one-directional and points at the lower-level module —
+`config_builder.py` remains entirely unaware of node-exporter and is not modified.
 
 The four interfaces are those the snap's own post-installation notes call out as requiring
 manual connection.
@@ -176,7 +231,29 @@ different questions:
 `prior_state` is not an ownership flag; it is a restore point. It records what to put back at
 teardown, and its emptiness is what implements rule 1.
 
-New `_reconcile_node_exporter() -> tuple[bool, str | None]` returns `(scrape_enabled, error)`:
+The matrix below is implemented by `node_exporter.plan_reconcile`, not by branches in
+`charm.py`. The charm's entire share of it:
+
+```python
+def _reconcile_node_exporter(self) -> tuple[bool, str | None]:
+    plan = node_exporter.plan_reconcile(
+        enabled=self._node_exporter_enabled(),
+        prior_state=self._stored.node_exporter_prior_state,
+        observe=node_exporter.observe,
+    )
+    self._stored.node_exporter_prior_state = plan.prior_state
+    try:
+        node_exporter.apply(plan)
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+    return plan.scrape_enabled, None
+```
+
+`prior_state` is persisted before `apply` runs. If a snap command fails partway, the recorded
+restore point still reflects what was on the machine, so teardown does the right thing rather
+than reading `""` and walking away.
+
+The resulting behaviour, returned as `(scrape_enabled, error)`:
 
 | prior state | config `true` | config `false` |
 |---|---|---|
@@ -212,19 +289,18 @@ skips only the node-exporter job, renders and applies the rest of the config nor
 
 ### Section 4: scrape job
 
-The charm builds one `MetricsScrapeJob` and appends it to the list returned by
-`_active_metrics_scrape_jobs(...)`:
+When `scrape_enabled` is true, `_active_metrics_scrape_jobs(...)` appends one job:
 
 ```python
-BuilderMetricsScrapeJob(
-    job_name="node-exporter",
-    targets=[ScrapeTarget(address="localhost:9100", labels=topology_labels)],
-    metrics_path="/metrics",
-    scheme="http",
+node_exporter.scrape_job(
+    topology_labels=topology_labels,
     scrape_interval=self._global_scrape_interval(),
     scrape_timeout=self._global_scrape_timeout(),
 )
 ```
+
+That is the whole change at the call site — the port, job name, metrics path and scheme stay
+inside `node_exporter.py`.
 
 `topology_labels` is `principal_context.juju_labels(charm_name=payload.charm_name)` — the same
 labels the principal's own jobs receive, so node metrics attach to the Juju unit.
@@ -280,11 +356,17 @@ A new handler on `self.on.remove`:
 
 ```python
 def _on_remove(self, _: ops.RemoveEvent) -> None:
-    self._restore_node_exporter_prior_state()
+    try:
+        node_exporter.apply(
+            node_exporter.plan_teardown(prior_state=self._stored.node_exporter_prior_state)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("node-exporter teardown failed: %s", exc)
 ```
 
 Teardown is a full restore: put the machine back exactly as the charm found it, so removing the
-unit leaves no trace. This is where the three non-empty `prior_state` values finally differ.
+unit leaves no trace. The mapping lives in `plan_teardown`; this is where the three non-empty
+`prior_state` values finally differ.
 
 | prior state | teardown action |
 |---|---|
@@ -309,49 +391,66 @@ Failures are logged, not raised — a failing teardown must not wedge unit remov
 
 ## Testing
 
-### `tests/unit/test_node_exporter.py` (new)
+The layer split means the state machine is tested without mocks, and the charm tests shrink to
+wiring checks.
+
+### `tests/unit/test_node_exporter.py` (new) — layer 2, pure
+
+The full `prior_state` matrix as pure `plan_reconcile` / `plan_teardown` assertions over
+`Plan.actions`. No subprocess, no `ops.testing`, no charm instance.
+
+Rule 1, the opt-in gate:
+
+- `enabled=False`, `prior_state=""` → empty plan, `prior_state` stays `""`, and the `observe`
+  spy is **never called** — not even a read-only `snap list`. The default-deployment no-op.
+- `plan_teardown(prior_state="")` → empty plan.
+
+Rule 2, config governs after opt-in — all three record-and-act paths, then the `false` column:
+
+- `enabled=True`, `prior_state=""`, observed absent → `("install", "connect")`, records `absent`.
+- `enabled=True`, `prior_state=""`, observed installed+disabled → `("enable", "connect")`,
+  records `disabled`.
+- `enabled=True`, `prior_state=""`, observed installed+enabled → `("connect",)`, records
+  `enabled`.
+- `enabled=True` with any non-empty `prior_state` → `("connect",)`, `prior_state` unchanged.
+- `enabled=False` with `prior_state` in `absent` / `disabled` / `enabled` → `("disable",)` in
+  all three cases, never `("remove",)`.
+
+Teardown, full restore — the only place the three values diverge:
+
+- `absent` → `("remove",)`
+- `disabled` → `("disable",)`
+- `enabled` → `("enable",)`, not `("remove",)` and not empty
+
+Sequence test, the case that drove the design — pre-installed and running, then `false` → `true`
+→ `false` → teardown, threading `prior_state` through each step. Asserted action tuples: `()`,
+`("connect",)`, `("disable",)`, `("enable",)`. The machine ends where it started.
+
+`scrape_job()` returns `localhost:9100`, job name `node-exporter`, path `/metrics`, and the
+topology labels it was handed.
+
+### `tests/unit/test_node_exporter.py` — layer 1, mocked subprocess
 
 - Each of `install` / `enable` / `disable` / `remove` / `connect_interfaces` builds the expected
-  argv, against a mocked `subprocess`.
-- `is_installed` and `is_enabled` parse real `snap list` output, including the `disabled` note.
+  argv.
+- `observe()` parses real `snap list` output into `SnapState`, including the `disabled` note and
+  the not-installed case.
 - `connect_interfaces` attempts all four interfaces and continues past one failure.
 - `get_version` parses real `snap list` output and returns `None` when the snap is absent.
+- `apply()` dispatches each action name to the matching effect, in order.
 
-### `tests/unit/test_charm.py` (additions)
+### `tests/unit/test_charm.py` (additions) — wiring only
 
 - Enabled renders a `node-exporter` job carrying the principal topology labels.
-- Enabled records `prior_state` once and does not overwrite it on a later reconcile.
+- `_reconcile_node_exporter` persists `plan.prior_state` into `StoredState`, and persists it
+  even when `apply` raises.
+- Snap failure → Blocked, but the rest of the config is still written.
+- `on.remove` calls `apply(plan_teardown(...))` with the stored `prior_state`.
 - `juju-info` only, no `machine-observability`, enabled → Active.
 - No `juju-info`, v2 payload with `source_topology` → Active with topology labels from the
   payload.
 - No `juju-info`, v1 payload → Waiting.
 - `juju-info` present and `source_topology` also present → `juju-info` wins.
-- Snap install failure → Blocked, but the rest of the config is still written.
-
-Prior-state matrix, one test per cell:
-
-Rule 1, the opt-in gate:
-
-- config `false`, `prior_state=""`, snap installed and running → **no snap command is issued at
-  all**, and no node-exporter job is rendered. This is the default-deployment no-op.
-- `remove`, `prior_state=""` → no snap command.
-
-Rule 2, config governs after opt-in:
-
-- config `false`, `prior_state="absent"` → `disable()`, not `remove()`.
-- config `false`, `prior_state="disabled"` → `disable()`.
-- config `false`, `prior_state="enabled"` → `disable()`.
-
-Teardown, full restore:
-
-- `remove`, `prior_state="absent"` → `snap remove --purge`.
-- `remove`, `prior_state="disabled"` → `disable()`, not `remove()`.
-- `remove`, `prior_state="enabled"` → `enable()`, not `remove()`.
-
-End-to-end sequence, since this is the case that drove the design — snap pre-installed and
-running, then `false` → `true` → `false` → unit removed. Assert: no command, then
-`connect_interfaces()` only, then `disable()`, then `enable()`. The machine ends where it
-started.
 
 ### `tests/unit/test_repo_baseline.py` (addition)
 
@@ -366,9 +465,9 @@ slice; the snap path needs a real machine and is verified manually per the READM
 
 | File | Change |
 |---|---|
-| `src/node_exporter.py` | new — snap workload management |
+| `src/node_exporter.py` | new — snap effects, `prior_state` state machine, scrape job |
 | `src/principal_context.py` | add `from_source_topology` |
-| `src/charm.py` | topology fallback, reconcile, scrape job, gating, `_on_remove` |
+| `src/charm.py` | topology fallback, gating, and ~20 lines of node-exporter glue |
 | `charmcraft.yaml` | add `enable-node-exporter` |
 | `README.md` | document the option and the topology fallback |
 | `tests/unit/test_node_exporter.py` | new |
