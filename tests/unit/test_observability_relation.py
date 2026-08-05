@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from ops import testing
@@ -213,3 +214,57 @@ def test_principal_context_can_render_explicit_juju_charm_label():
     )
 
     assert context.juju_labels(charm_name="polkadot")["juju_charm"] == "polkadot"
+
+
+def test_principal_context_from_source_topology_uses_payload_topology():
+    topology = SimpleNamespace(
+        model="prod",
+        model_uuid="uuid-from-payload",
+        application="dwellir-observability-reference",
+        unit="dwellir-observability-reference/0",
+        charm_name="dwellir-observability-reference",
+    )
+
+    context = PrincipalContext.from_source_topology(topology, model_name="fallback", model_uuid="fallback-uuid")
+
+    assert context.application == "dwellir-observability-reference"
+    assert context.unit == "dwellir-observability-reference/0"
+    assert context.model == "prod"
+    assert context.model_uuid == "uuid-from-payload"
+    assert context.charm_name == "dwellir-observability-reference"
+
+
+def test_principal_context_from_source_topology_falls_back_to_charm_model():
+    topology = SimpleNamespace(
+        model="",
+        model_uuid="",
+        application="polkadot",
+        unit="polkadot/0",
+        charm_name="",
+    )
+
+    context = PrincipalContext.from_source_topology(topology, model_name="fallback", model_uuid="fallback-uuid")
+
+    assert context.model == "fallback"
+    assert context.model_uuid == "fallback-uuid"
+    assert context.charm_name == ""
+
+
+def test_principal_context_from_source_topology_renders_juju_labels():
+    topology = SimpleNamespace(
+        model="prod",
+        model_uuid="uuid",
+        application="polkadot",
+        unit="polkadot/0",
+        charm_name="polkadot",
+    )
+
+    labels = PrincipalContext.from_source_topology(topology).juju_labels()
+
+    assert labels == {
+        "juju_model": "prod",
+        "juju_model_uuid": "uuid",
+        "juju_application": "polkadot",
+        "juju_unit": "polkadot/0",
+        "juju_charm": "polkadot",
+    }
