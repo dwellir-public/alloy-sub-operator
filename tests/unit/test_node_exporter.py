@@ -322,6 +322,17 @@ def test_teardown_reenables_a_preexisting_running_snap():
     assert ACTION_REMOVE not in plan.actions
 
 
+def test_teardown_removes_a_bare_machine_opt_in_after_it_was_later_disabled():
+    """Opt in on a bare machine (records `absent`), disable, then remove the unit.
+
+    `_restore_actions` only checks `state.installed` for the `absent` row, so a snap
+    that is installed-but-disabled at teardown must still be removed.
+    """
+    plan = plan_teardown(prior_state=PRIOR_STATE_ABSENT, observe=ObserveSpy(SnapState(installed=True, enabled=False)))
+
+    assert plan.actions == (ACTION_REMOVE,)
+
+
 # --- Teardown observes too: an unneeded action is an error, not a no-op ---
 
 

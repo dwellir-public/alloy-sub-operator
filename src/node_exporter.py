@@ -198,7 +198,7 @@ def _restore_actions(prior_state: str, state: SnapState) -> tuple[str, ...]:
         return (ACTION_DISABLE,) if state.installed and state.enabled else ()
     if prior_state == PRIOR_STATE_ENABLED:
         return (ACTION_ENABLE,) if state.installed and not state.enabled else ()
-    return ()
+    return ()  # pragma: no cover - no current revision writes any other prior_state
 
 
 def _run(cmd: Iterable[str], *, timeout: int | None = None) -> subprocess.CompletedProcess[str]:

@@ -202,8 +202,9 @@ enable-node-exporter:
     metrics with the principal's Juju topology labels.
 
     When false, the scrape job is removed from the Alloy config and the snap is disabled,
-    provided this charm had previously enabled it. A node-exporter this charm has never
-    enabled is left untouched, so deploying with the default changes nothing.
+    provided you have set this option to true at least once -- even if the snap was already
+    running before the charm arrived. A node-exporter on a machine where this option has
+    never been set to true is left untouched, so deploying with the default changes nothing.
 
     On unit removal the charm restores the snap state it originally found.
   type: boolean
@@ -216,9 +217,10 @@ test stays green without modification.
 ### Section 3: reconcile
 
 `_stored` gains `node_exporter_prior_state: str`, one of `""` (the charm has never acted on the
-snap), `"absent"`, `"disabled"`, or `"enabled"`. It is written exactly once — the first time
-reconcile runs with the config `true` — and records the snap state the charm found before it
-changed anything.
+snap), `"absent"`, `"disabled"`, or `"enabled"`. It is written once — on the first *readable*
+reconcile with the config `true` — and records the snap state the charm found before it changed
+anything. An unreadable snapd on that first `true` leaves it at `""` rather than guessing; the
+first readable observation afterward is what actually settles it.
 
 Two rules govern everything, and it is worth stating them separately because they answer
 different questions:
@@ -281,8 +283,8 @@ The resulting behaviour, returned as `(scrape_enabled, error)`:
 | any of `absent` / `disabled` / `enabled` | installed, disabled | `enable` + `connect` | nothing |
 | any of `absent` / `disabled` / `enabled` | installed, enabled | nothing | `disable` |
 
-On the `true` path `prior_state` is recorded on first opt-in and never rewritten afterwards; on
-the `false` path it is carried through untouched. The three non-empty values behave identically
+On the `true` path `prior_state` is recorded on the first *readable* reconcile after opt-in and
+never rewritten afterwards; on the `false` path it is carried through untouched. The three non-empty values behave identically
 for config purposes and diverge only at teardown, which is the sole reason the distinction is
 stored at all.
 
@@ -424,9 +426,9 @@ unit leaves no trace. The mapping lives in `plan_teardown`; this is where the th
 | prior state | teardown action |
 |---|---|
 | `""` — never opted in | nothing |
-| `absent` — we installed it | `snap remove --purge` |
-| `disabled` — we enabled it | `disable()` |
-| `enabled` — already running | `enable()` |
+| `absent` — we installed it | `snap remove --purge`, only if still installed |
+| `disabled` — we enabled it | `disable()`, only if installed and still enabled |
+| `enabled` — already running | `enable()`, only if installed and now disabled |
 
 The `enabled` row calls `enable()` rather than doing nothing, because the charm may currently
 have the snap disabled via `enable-node-exporter=false` under rule 2. Doing nothing there would
@@ -573,6 +575,16 @@ slice; the snap path needs a real machine and is verified manually per the READM
 
 - **Snap availability.** `snap install` needs network access to the store. Air-gapped machines
   will fail the reconcile and land in Blocked with the snap error. Acceptable and visible.
+- **A failed install can leave `prior_state="absent"` pointed at a snap the charm never
+  installed.** `prior_state` is persisted before `apply` runs, so a `snap install` failure on an
+  air-gapped machine (the risk above) still records `absent`. If the operator then installs
+  node-exporter by hand for another consumer, later reconciles observe it installed and enabled
+  and do nothing — the config path is quiet. But unit removal reads the stored `absent` and issues
+  `snap remove --purge` on that manually-installed snap, deleting something the charm never put
+  there. This follows directly from "persist the restore point before touching the machine" plus
+  "teardown restores exactly what was first found," so it is by design, not a bug — but it is a
+  real, reachable consequence and an operator relying on the charm's Blocked status to mean
+  "nothing happened" should know teardown can still remove a snap installed after that failure.
 - **Prior-state loss.** `StoredState` lives in the unit's local database. If it were lost, the
   charm would read `""` and take no snap action on either the `false` path or teardown, leaving
   the snap installed and running. That is the safe failure direction: the charm errs toward
@@ -584,10 +596,10 @@ slice; the snap path needs a real machine and is verified manually per the READM
   wants the charm to stop managing an existing snap entirely must remove the unit, which
   triggers the full restore.
 - **Prior state is recorded once; machine state is read every time.** `prior_state` is written
-  on first opt-in and never rewritten, but every reconcile re-reads the machine and acts on what
-  it finds. So if an operator manually disables the snap while the charm has it enabled, the
-  charm re-enables it on the next reconcile. That is intended — config is the declared intent —
-  but it means `snap disable` by hand is not a durable override. Setting
+  on the first readable reconcile after opt-in and never rewritten, but every reconcile re-reads
+  the machine and acts on what it finds. So if an operator manually disables the snap while the
+  charm has it enabled, the charm re-enables it on the next reconcile. That is intended — config
+  is the declared intent — but it means `snap disable` by hand is not a durable override. Setting
   `enable-node-exporter=false` is.
 - **Unreadable snapd stalls rather than guesses.** While `snap list` cannot be run at all — snapd
   still seeding on a fresh machine is the common case — the reconcile takes no action and

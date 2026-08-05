@@ -997,8 +997,9 @@ In `charmcraft.yaml`, add to `config.options` immediately after the `max_elapsed
         metrics with the principal's Juju topology labels.
 
         When false, the scrape job is removed from the Alloy config and the snap is disabled,
-        provided this charm had previously enabled it. A node-exporter this charm has never
-        enabled is left untouched, so deploying with the default changes nothing.
+        provided you have set this option to true at least once -- even if the snap was already
+        running before the charm arrived. A node-exporter on a machine where this option has
+        never been set to true is left untouched, so deploying with the default changes nothing.
 
         On unit removal the charm restores the snap state it originally found.
       type: boolean

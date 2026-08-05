@@ -380,8 +380,9 @@ class AlloySubCharm(ops.CharmBase):
         """Return the active-status message for the currently rendered config."""
         if self._node_exporter_enabled() and not scrape_enabled:
             # snapd could not be read, so no node-exporter job was rendered. Claiming
-            # node-exporter metrics here would advertise a scrape that does not exist.
-            return "node-exporter pending snap state"
+            # node-exporter metrics here would advertise a scrape that does not exist,
+            # but the caller's own status signal (e.g. "Alloy is running") must survive.
+            return f"{default}; node-exporter pending snap state"
         if not self._has_machine_observability_relation():
             return "node-exporter metrics only"
         return default
