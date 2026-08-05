@@ -3,8 +3,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from src.config_builder import ConfigBuilder, FileLogSource, MetricsScrapeJob, ScrapeTarget
+from src.config_builder import (
+    ConfigBuilder,
+    FileLogSource,
+    HostMetrics,
+    MetricsScrapeJob,
+    ScrapeTarget,
+)
 from src.outbound_endpoints import OutboundEndpoint
+
+REMOTE_WRITE_URL = "http://mimir:9009/api/v1/push"
 
 
 def test_build_renders_only_juju_labels_for_logs():
@@ -218,3 +226,79 @@ def test_build_renders_loki_write_with_basic_auth_and_ca_pem():
     assert 'username = "1076854"' in config
     assert 'password = "glc_token"' in config
     assert 'ca_pem = "-----BEGIN CERTIFICATE-----\\nabc\\n-----END CERTIFICATE-----\\n"' in config
+
+
+def _host_metrics_builder(*, host_metrics, remote_write_endpoints=(REMOTE_WRITE_URL,)):
+    return ConfigBuilder(
+        loki_endpoints=[],
+        remote_write_endpoints=list(remote_write_endpoints),
+        metrics_scrape_jobs=[],
+        systemd_units=[],
+        journal_match_expressions=[],
+        file_log_sources=[],
+        topology_labels={},
+        global_scrape_interval="1m",
+        global_scrape_timeout="10s",
+        path_exclude=[],
+        queue_size=1000,
+        max_elapsed_time_min=5,
+        tls_insecure_skip_verify=False,
+        host_metrics=host_metrics,
+    )
+
+
+def test_build_omits_host_metrics_when_not_requested():
+    config = _host_metrics_builder(host_metrics=None).build()
+
+    assert "prometheus.exporter.unix" not in config
+    assert "discovery.relabel" not in config
+
+
+def test_build_renders_exporter_relabel_and_scrape_for_host_metrics():
+    config = _host_metrics_builder(
+        host_metrics=HostMetrics(
+            topology_labels={"juju_application": "polkadot", "juju_unit": "polkadot/0"},
+            scrape_timeout="5s",
+        )
+    ).build()
+
+    assert 'prometheus.exporter.unix "node" {' in config
+    assert 'discovery.relabel "node" {' in config
+    assert "  targets = prometheus.exporter.unix.node.targets" in config
+    assert 'prometheus.scrape "node" {' in config
+    assert "  targets = discovery.relabel.node.output" in config
+    assert '  job_name = "node-exporter"' in config
+    assert '  scrape_timeout = "5s"' in config
+    assert "  forward_to = [prometheus.remote_write.metrics.receiver]" in config
+
+
+def test_host_metrics_scrape_interval_is_pinned_regardless_of_global():
+    config = _host_metrics_builder(host_metrics=HostMetrics()).build()
+
+    assert '  scrape_interval = "15s"' in config
+    assert '  scrape_interval = "1m"' not in config
+
+
+def test_host_metrics_falls_back_to_the_global_scrape_timeout():
+    config = _host_metrics_builder(host_metrics=HostMetrics()).build()
+
+    assert '  scrape_timeout = "10s"' in config
+
+
+def test_host_metrics_attaches_topology_labels_as_relabel_rules():
+    config = _host_metrics_builder(host_metrics=HostMetrics(topology_labels={"juju_unit": "polkadot/0"})).build()
+
+    assert '    target_label = "juju_unit"' in config
+    assert '    replacement  = "polkadot/0"' in config
+
+
+def test_host_metrics_renders_disabled_collectors():
+    config = _host_metrics_builder(host_metrics=HostMetrics(disable_collectors=["mdadm", "zfs"])).build()
+
+    assert '  disable_collectors = ["mdadm", "zfs"]' in config
+
+
+def test_host_metrics_forwards_nowhere_without_remote_write():
+    config = _host_metrics_builder(host_metrics=HostMetrics(), remote_write_endpoints=()).build()
+
+    assert "  forward_to = []" in config
