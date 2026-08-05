@@ -317,7 +317,6 @@ class AlloySubCharm(ops.CharmBase):
                 *metrics_scrape_jobs,
                 node_exporter.scrape_job(
                     topology_labels=topology_labels,
-                    scrape_interval=self._global_scrape_interval(),
                     scrape_timeout=self._global_scrape_timeout(),
                 ),
             ]

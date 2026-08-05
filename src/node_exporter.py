@@ -20,6 +20,10 @@ JOB_NAME = "node-exporter"
 METRICS_PATH = "/metrics"
 SCHEME = "http"
 
+# Host metrics are cheap and their value is in the resolution, so this job is
+# pinned here rather than following the charm's global scrape interval.
+SCRAPE_INTERVAL = "15s"
+
 ACTION_INSTALL = "install"
 ACTION_ENABLE = "enable"
 ACTION_DISABLE = "disable"
@@ -302,15 +306,18 @@ def apply(plan: Plan) -> None:
 def scrape_job(
     *,
     topology_labels: dict[str, str],
-    scrape_interval: str,
     scrape_timeout: str,
 ) -> MetricsScrapeJob:
-    """Build the Alloy scrape job for the local node-exporter."""
+    """Build the Alloy scrape job for the local node-exporter.
+
+    The interval is fixed at :data:`SCRAPE_INTERVAL`; only the timeout follows the
+    charm's global setting.
+    """
     return MetricsScrapeJob(
         job_name=JOB_NAME,
         targets=[ScrapeTarget(address=f"localhost:{DEFAULT_PORT}", labels=dict(topology_labels))],
         metrics_path=METRICS_PATH,
         scheme=SCHEME,
-        scrape_interval=scrape_interval,
+        scrape_interval=SCRAPE_INTERVAL,
         scrape_timeout=scrape_timeout,
     )

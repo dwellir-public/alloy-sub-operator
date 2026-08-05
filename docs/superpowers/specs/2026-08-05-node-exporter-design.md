@@ -179,12 +179,14 @@ real complexity sits, it should be the cheapest thing in the codebase to test ex
 #### Layer 3 — the scrape job
 
 ```python
-def scrape_job(*, topology_labels: dict[str, str], scrape_interval: str, scrape_timeout: str) -> MetricsScrapeJob
+def scrape_job(*, topology_labels: dict[str, str], scrape_timeout: str) -> MetricsScrapeJob
 ```
 
 Returns the fully formed `MetricsScrapeJob` targeting `localhost:9100`. `JOB_NAME`,
-`METRICS_PATH`, `DEFAULT_PORT`, and the `http` scheme stay here rather than being spelled out at
-the call site in `charm.py`.
+`METRICS_PATH`, `DEFAULT_PORT`, the `http` scheme, and the `SCRAPE_INTERVAL` of `15s` stay here
+rather than being spelled out at the call site in `charm.py`. The interval is hardcoded rather
+than following `global_scrape_interval`: host metrics are cheap and their value is in the
+resolution.
 
 This makes `node_exporter.py` import `MetricsScrapeJob` and `ScrapeTarget` from
 `config_builder.py`. That dependency is one-directional and points at the lower-level module —
@@ -342,7 +344,6 @@ When `scrape_enabled` is true, `_active_metrics_scrape_jobs(...)` appends one jo
 ```python
 node_exporter.scrape_job(
     topology_labels=topology_labels,
-    scrape_interval=self._global_scrape_interval(),
     scrape_timeout=self._global_scrape_timeout(),
 )
 ```
@@ -512,8 +513,8 @@ through each step:
 - Two consecutive reconciles with unchanged config emit the action once and then `()` — both for
   `false` after a successful disable and for `true` on an installed+enabled snap.
 
-`scrape_job()` returns `localhost:9100`, job name `node-exporter`, path `/metrics`, and the
-topology labels it was handed.
+`scrape_job()` returns `localhost:9100`, job name `node-exporter`, path `/metrics`, a `15s`
+scrape interval, and the topology labels it was handed.
 
 ### `tests/unit/test_node_exporter.py` — layer 1, mocked subprocess
 

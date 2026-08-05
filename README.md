@@ -134,7 +134,9 @@ juju config alloy-sub enable-node-exporter=true
 The charm installs the snap if it is missing, connects `hardware-observe`,
 `mount-observe`, `network-observe`, and `system-observe`, and renders a
 `node-exporter` scrape job against `localhost:9100` carrying the principal's
-Juju topology labels, so host metrics attribute to the correct Juju unit.
+Juju topology labels, so host metrics attribute to the correct Juju unit. This
+job scrapes every 15s regardless of `global_scrape_interval`; only
+`global_scrape_timeout` applies to it.
 
 ### Ownership rules
 

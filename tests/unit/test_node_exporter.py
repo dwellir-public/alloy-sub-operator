@@ -586,12 +586,12 @@ def test_apply_does_nothing_for_an_empty_plan():
 def test_scrape_job_targets_localhost_with_topology_labels():
     labels = {"juju_application": "polkadot", "juju_unit": "polkadot/0"}
 
-    job = scrape_job(topology_labels=labels, scrape_interval="30s", scrape_timeout="5s")
+    job = scrape_job(topology_labels=labels, scrape_timeout="5s")
 
     assert job.job_name == "node-exporter"
     assert job.metrics_path == "/metrics"
     assert job.scheme == "http"
-    assert job.scrape_interval == "30s"
+    assert job.scrape_interval == "15s"
     assert job.scrape_timeout == "5s"
     assert len(job.targets) == 1
     assert job.targets[0].address == "localhost:9100"
@@ -601,7 +601,7 @@ def test_scrape_job_targets_localhost_with_topology_labels():
 def test_scrape_job_copies_the_labels_it_is_given():
     labels = {"juju_unit": "polkadot/0"}
 
-    job = scrape_job(topology_labels=labels, scrape_interval="1m", scrape_timeout="10s")
+    job = scrape_job(topology_labels=labels, scrape_timeout="10s")
     labels["juju_unit"] = "mutated"
 
     assert job.targets[0].labels == {"juju_unit": "polkadot/0"}
