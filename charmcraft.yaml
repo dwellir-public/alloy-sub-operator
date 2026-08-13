@@ -63,6 +63,17 @@ config:
         endpoints take precedence.
       type: string
       default: "10s"
+    enable-host-metrics:
+      description: |
+        Collect host-level metrics using Alloy's built-in node_exporter
+        (prometheus.exporter.unix). No process is installed on the machine and no
+        port is opened; the exporter runs inside Alloy and its metrics are
+        forwarded over remote write, carrying the principal's Juju topology
+        labels. This job scrapes every 15s regardless of global_scrape_interval.
+        Default collectors emit roughly a thousand series per host, so leave this
+        off where remote write volume is a concern.
+      type: boolean
+      default: false
     tls_insecure_skip_verify:
       description: |
         Skip TLS verification for rendered scrape jobs when true.

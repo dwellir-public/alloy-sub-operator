@@ -660,6 +660,8 @@ def test_configure_restarts_alloy_when_custom_args_change():
         _queue_size=lambda: 1000,
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
+        _host_metrics_enabled=lambda: False,
+        _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
         _missing_relation_requirements=lambda **kwargs: [],
@@ -716,6 +718,8 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         _queue_size=lambda: 1000,
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
+        _host_metrics_enabled=lambda: False,
+        _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
         _missing_relation_requirements=lambda **kwargs: [],
@@ -772,6 +776,8 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         _queue_size=lambda: 1000,
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
+        _host_metrics_enabled=lambda: False,
+        _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
         _missing_relation_requirements=lambda **kwargs: [],
@@ -1000,4 +1006,184 @@ def test_removing_last_sink_keeps_active_for_declared_metrics_after_loki_then_re
     assert reload_mock.call_count == reloads_before_last_remove + 1
     assert harness.model.unit.status == testing.ActiveStatus(
         "Alloy service running; config valid; Alloy config updated"
+    )
+
+
+SOURCE_TOPOLOGY = {
+    "model": "payload-model",
+    "model_uuid": "payload-uuid",
+    "application": "reference",
+    "unit": "reference/0",
+    "charm_name": "reference-charm",
+}
+
+
+def test_principal_context_falls_back_to_source_topology_without_juju_info():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="reference",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        schema_version=2,
+                        charm_name="reference-charm",
+                        source_topology=SOURCE_TOPOLOGY,
+                    )
+                },
+            ),
+        ],
+        leader=True,
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        context = manager.charm._principal_context()
+
+    assert context is not None
+    assert context.application == "reference"
+    assert context.unit == "reference/0"
+    assert context.model == "payload-model"
+
+
+def test_principal_context_prefers_juju_info_over_source_topology():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        schema_version=2,
+                        charm_name="reference-charm",
+                        source_topology=SOURCE_TOPOLOGY,
+                    )
+                },
+            ),
+        ],
+        leader=True,
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        context = manager.charm._principal_context()
+
+    assert context is not None
+    assert context.application == "polkadot"
+
+
+def test_principal_context_is_none_for_v1_payload_without_juju_info():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload()},
+            ),
+        ],
+        leader=True,
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        assert manager.charm._principal_context() is None
+
+
+def _host_metrics_state(*, enabled, with_machine_observability=True):
+    relations = [
+        testing.SubordinateRelation(
+            "juju-info",
+            remote_app_name="polkadot",
+            remote_unit_id=0,
+            remote_unit_data={"private-address": "10.0.0.5"},
+        ),
+        testing.Relation(
+            "send-remote-write",
+            remote_app_name="mimir",
+            remote_app_data={"remote_write": json.dumps({"url": REMOTE_WRITE_URL})},
+        ),
+    ]
+    if with_machine_observability:
+        relations.append(
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": _machine_observability_payload()},
+            )
+        )
+    return testing.State(relations=relations, config={"enable-host-metrics": enabled})
+
+
+def _run_and_capture_config(state):
+    """Run a start hook against the real ConfigBuilder and return the written config."""
+    ctx = testing.Context(AlloySubCharm)
+    with (
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=True),
+        patch("charm.alloy.ensure_config_dir_permissions"),
+        patch("charm.alloy.write_config_text") as write_config,
+        patch("charm.alloy.write_custom_args"),
+        patch("charm.alloy.custom_args_applied", return_value=True),
+        patch("charm.alloy.reload"),
+        patch("charm.alloy.restart"),
+        patch("charm.alloy.verify_config"),
+    ):
+        state_out = ctx.run(ctx.on.start(), state)
+    return state_out, write_config.call_args[0][0]
+
+
+def test_enable_host_metrics_renders_the_builtin_unix_exporter():
+    _, config = _run_and_capture_config(_host_metrics_state(enabled=True))
+
+    assert 'prometheus.exporter.unix "node" {' in config
+    assert "  targets = discovery.relabel.node.output" in config
+    assert '  job_name = "node-exporter"' in config
+    assert "  forward_to = [prometheus.remote_write.metrics.receiver]" in config
+
+
+def test_enable_host_metrics_labels_them_with_juju_topology():
+    _, config = _run_and_capture_config(_host_metrics_state(enabled=True))
+
+    assert '    target_label = "juju_unit"' in config
+    assert '    replacement  = "polkadot/0"' in config
+
+
+def test_host_metrics_off_by_default_renders_no_exporter():
+    _, config = _run_and_capture_config(_host_metrics_state(enabled=False))
+
+    assert "prometheus.exporter.unix" not in config
+
+
+def test_host_metrics_alone_configures_without_machine_observability():
+    state_out, config = _run_and_capture_config(_host_metrics_state(enabled=True, with_machine_observability=False))
+
+    assert 'prometheus.exporter.unix "node" {' in config
+    assert state_out.unit_status == testing.ActiveStatus("Alloy service running; config valid; host metrics only")
+
+
+def test_no_machine_observability_and_no_host_metrics_still_waits():
+    ctx = testing.Context(AlloySubCharm)
+    with (
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value="1.0.0"),
+        patch("charm.alloy.is_active", return_value=False),
+    ):
+        state_out = ctx.run(
+            ctx.on.start(),
+            _host_metrics_state(enabled=False, with_machine_observability=False),
+        )
+
+    assert state_out.unit_status == testing.WaitingStatus(
+        "Alloy service down; config waiting for machine-observability relation"
     )

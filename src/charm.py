@@ -28,6 +28,7 @@ try:
     from .config_builder import (
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
+        HostMetrics,
         ScrapeTarget,
     )
     from .config_builder import (
@@ -54,6 +55,7 @@ except ImportError:
     from config_builder import (
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
+        HostMetrics,
         ScrapeTarget,
     )
     from config_builder import (
@@ -270,7 +272,9 @@ class AlloySubCharm(ops.CharmBase):
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
             return False
-        if not self._has_machine_observability_relation():
+        if not self._has_machine_observability_relation() and not self._host_metrics_enabled():
+            # Host metrics alone are enough to render a useful config, so the
+            # relation is only required when nothing else would be collected.
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(
                 self._status_message("config waiting for machine-observability relation")
@@ -285,6 +289,7 @@ class AlloySubCharm(ops.CharmBase):
         )
         logger.info("Configuring Alloy with principal context: %s and payload: %s", principal_context, payload)
 
+        topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
         builder = ConfigBuilder(
             loki_endpoints=loki_endpoints,
             remote_write_endpoints=remote_write_endpoints,
@@ -299,13 +304,21 @@ class AlloySubCharm(ops.CharmBase):
                 )
                 for source in payload.log_files
             ],
-            topology_labels=principal_context.juju_labels(charm_name=payload.charm_name),
+            topology_labels=topology_labels,
             global_scrape_interval=self._global_scrape_interval(),
             global_scrape_timeout=self._global_scrape_timeout(),
             path_exclude=[],
             queue_size=self._queue_size(),
             max_elapsed_time_min=self._max_elapsed_time_min(),
             tls_insecure_skip_verify=self._tls_insecure_skip_verify(),
+            host_metrics=(
+                HostMetrics(
+                    topology_labels=topology_labels,
+                    scrape_timeout=self._global_scrape_timeout(),
+                )
+                if self._host_metrics_enabled()
+                else None
+            ),
         )
         desired_custom_args = self._desired_custom_args()
         previous_custom_args = self._stored.last_custom_args
@@ -332,8 +345,18 @@ class AlloySubCharm(ops.CharmBase):
                 self._status_message(self._relation_waiting_message(waiting_requirements))
             )
             return False
-        self.unit.status = ops.ActiveStatus(self._status_message(f"config valid; {active_message}"))
+        self.unit.status = ops.ActiveStatus(
+            self._status_message(f"config valid; {self._active_message(active_message)}")
+        )
         return True
+
+    def _active_message(self, default: str) -> str:
+        """Return the active-status message for the currently rendered config."""
+        if not self._has_machine_observability_relation():
+            # Only host metrics are being collected; saying more would advertise
+            # workload telemetry that nothing is producing.
+            return "host metrics only"
+        return default
 
     @staticmethod
     def _logs_declared(payload: MachineObservabilityPayload) -> bool:
@@ -361,7 +384,9 @@ class AlloySubCharm(ops.CharmBase):
         missing_relations: list[str] = []
         if principal_context is None:
             missing_relations.append("juju-info relation")
-        if not self._has_machine_observability_relation():
+        if not self._has_machine_observability_relation() and not self._host_metrics_enabled():
+            # Host metrics are a complete pipeline on their own, so the relation
+            # is only outstanding when nothing else would be collected.
             missing_relations.append("machine-observability relation")
         return missing_relations
 
@@ -407,15 +432,22 @@ class AlloySubCharm(ops.CharmBase):
             tmp_path.unlink(missing_ok=True)
 
     def _principal_context(self) -> PrincipalContext | None:
-        """Return principal context from the subordinate attachment relation."""
+        """Return principal context from juju-info, falling back to v2 source topology."""
         relation = self.model.get_relation("juju-info")
-        if relation is None or not relation.units:
-            return None
-        return PrincipalContext.from_relation(
-            relation,
-            model_name=self.model.name,
-            model_uuid=self.model.uuid,
-        )
+        if relation is not None and relation.units:
+            return PrincipalContext.from_relation(
+                relation,
+                model_name=self.model.name,
+                model_uuid=self.model.uuid,
+            )
+        topology = self._observability_payload().source_topology
+        if topology is not None:
+            return PrincipalContext.from_source_topology(
+                topology,
+                model_name=self.model.name,
+                model_uuid=self.model.uuid,
+            )
+        return None
 
     def _observability_payload(self):
         """Return the current machine-observability payload if present."""
@@ -539,6 +571,10 @@ class AlloySubCharm(ops.CharmBase):
     def _tls_insecure_skip_verify(self) -> bool:
         """Return whether scrape TLS verification should be skipped."""
         return bool(self.config.get("tls_insecure_skip_verify", False))
+
+    def _host_metrics_enabled(self) -> bool:
+        """Return whether host metrics should be collected."""
+        return bool(self.config.get("enable-host-metrics", False))
 
     def _queue_size(self) -> int:
         """Return queue size for outbound telemetry buffering."""

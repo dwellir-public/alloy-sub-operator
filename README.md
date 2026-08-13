@@ -122,6 +122,25 @@ Expected result:
 - the Grafana Cloud Loki endpoint is rendered with `basic_auth`
 - if plain upstream relations also exist, Alloy renders both sets of endpoints
 
+## Host metrics
+
+Set `enable-host-metrics=true` to collect host-level metrics, labelled with the
+principal's Juju topology so they attribute to the correct unit:
+
+```bash
+juju config alloy-sub enable-host-metrics=true
+```
+
+Alloy collects these itself, so nothing is installed on the machine and no port
+is opened. Any node-exporter already on the host is left alone.
+
+- The job scrapes every 15s regardless of `global_scrape_interval`; only
+  `global_scrape_timeout` applies.
+- This is a complete pipeline on its own. With it set, the charm renders config
+  and reports `host metrics only` without the `machine-observability` relation.
+
+It defaults to `false`
+
 ## Validation Flow
 
 Deploy the subordinate and principal, relate both relation endpoints, then inspect

@@ -24,6 +24,21 @@ def test_charmcraft_uses_uv_baseline():
     assert "ubuntu@24.04:amd64:" in charmcraft
 
 
+def test_charmcraft_declares_the_host_metrics_option():
+    """An undeclared option is unsettable, so the charm would read False forever."""
+    charmcraft = Path("charmcraft.yaml").read_text()
+
+    assert "enable-host-metrics:" in charmcraft
+    assert "type: boolean" in charmcraft
+
+
+def test_readme_documents_host_metrics():
+    readme = Path("README.md").read_text()
+
+    assert "## Host metrics" in readme
+    assert "enable-host-metrics=true" in readme
+
+
 def test_pyproject_has_uv_style_dependency_groups():
     pyproject = Path("pyproject.toml").read_text()
 

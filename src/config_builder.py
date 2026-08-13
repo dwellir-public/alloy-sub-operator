@@ -20,6 +20,13 @@ DEFAULT_CONFIG_BACKUP_PATH = os.path.join(DEFAULT_CONFIG_DIR, "config.alloy.bak"
 DEFAULT_SYSTEMD_DEFAULTS_PATH = "/etc/default/alloy"
 REMOTE_WRITE_COMPONENT_NAME = "metrics"
 
+HOST_METRICS_COMPONENT_NAME = "node"
+HOST_METRICS_JOB_NAME = "node-exporter"
+
+# Host metrics are cheap and their value is in the resolution, so this job is
+# pinned here rather than following the charm's global scrape interval.
+HOST_METRICS_SCRAPE_INTERVAL = "15s"
+
 
 @dataclass(frozen=True)
 class ScrapeTarget:
@@ -40,6 +47,20 @@ class MetricsScrapeJob:
     scrape_interval: str = ""
     scrape_timeout: str = ""
     tls_config: dict[str, str | bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class HostMetrics:
+    """Host-level metrics collected by Alloy's built-in node_exporter.
+
+    Alloy embeds node_exporter as ``prometheus.exporter.unix``, so host metrics
+    need no second process, no listening port, and nothing installed on the
+    machine. The charm therefore owns no host state here: this is config only.
+    """
+
+    topology_labels: dict[str, str] = field(default_factory=dict)
+    scrape_timeout: str = ""
+    disable_collectors: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -70,6 +91,7 @@ class ConfigBuilder:
         queue_size: int,
         max_elapsed_time_min: int,
         tls_insecure_skip_verify: bool,
+        host_metrics: HostMetrics | None = None,
     ):
         self._loki_endpoints = loki_endpoints
         self._remote_write_endpoints = remote_write_endpoints
@@ -84,12 +106,15 @@ class ConfigBuilder:
         self._queue_size = queue_size
         self._max_elapsed_time_min = max_elapsed_time_min
         self._tls_insecure_skip_verify = tls_insecure_skip_verify
+        self._host_metrics = host_metrics
 
     def build(self) -> str:
         """Return the rendered Alloy configuration."""
         blocks = []
         if self._remote_write_endpoints:
             blocks.extend([self._render_remote_write(), ""])
+        if self._host_metrics is not None:
+            blocks.extend([self._render_host_metrics(self._host_metrics), ""])
         for job in self._metrics_scrape_jobs:
             blocks.extend([self._render_metrics_scrape(job), ""])
         if self._has_log_sources():
@@ -149,13 +174,61 @@ class ConfigBuilder:
         lines.append("  }")
         return lines
 
-    def _render_metrics_scrape(self, scrape_job: MetricsScrapeJob) -> str:
-        component_name = self._sanitize_component_name(scrape_job.job_name)
-        forward_to = (
+    def _render_host_metrics(self, host_metrics: HostMetrics) -> str:
+        """Render the exporter, relabel, and scrape blocks for host metrics.
+
+        The exporter's targets are produced by the component rather than built
+        here, so the Juju topology labels have to be attached with a
+        ``discovery.relabel`` block instead of being written into the target map.
+        """
+        name = HOST_METRICS_COMPONENT_NAME
+        lines = [f'prometheus.exporter.unix "{name}" {{']
+        if host_metrics.disable_collectors:
+            collectors = ", ".join(json.dumps(collector) for collector in host_metrics.disable_collectors)
+            lines.append(f"  disable_collectors = [{collectors}]")
+        lines.extend(
+            [
+                "}",
+                "",
+                f'discovery.relabel "{name}" {{',
+                f"  targets = prometheus.exporter.unix.{name}.targets",
+            ]
+        )
+        for key in sorted(host_metrics.topology_labels):
+            lines.extend(
+                [
+                    "",
+                    "  rule {",
+                    f"    target_label = {json.dumps(key)}",
+                    f"    replacement  = {json.dumps(host_metrics.topology_labels[key])}",
+                    "  }",
+                ]
+            )
+        lines.extend(
+            [
+                "}",
+                "",
+                f'prometheus.scrape "{name}" {{',
+                f"  targets = discovery.relabel.{name}.output",
+                f"  job_name = {json.dumps(HOST_METRICS_JOB_NAME)}",
+                f"  scrape_interval = {json.dumps(HOST_METRICS_SCRAPE_INTERVAL)}",
+                f"  scrape_timeout = {json.dumps(host_metrics.scrape_timeout or self._global_scrape_timeout)}",
+                f"  forward_to = {self._metrics_forward_to()}",
+                "}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _metrics_forward_to(self) -> str:
+        return (
             f"[prometheus.remote_write.{REMOTE_WRITE_COMPONENT_NAME}.receiver]"
             if self._remote_write_endpoints
             else "[]"
         )
+
+    def _render_metrics_scrape(self, scrape_job: MetricsScrapeJob) -> str:
+        component_name = self._sanitize_component_name(scrape_job.job_name)
+        forward_to = self._metrics_forward_to()
         lines = [
             f'prometheus.scrape "{component_name}" {{',
             "  targets = [",
