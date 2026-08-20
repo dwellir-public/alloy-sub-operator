@@ -109,6 +109,16 @@ requires:
     optional: true
 
 parts:
+  cos-tool:
+    plugin: dump
+    source: https://github.com/canonical/cos-tool/releases/download/rel-20260713/cos-tool-amd64
+    source-type: file
+    source-checksum: sha256/1952c30d009e5a94bb9d7174116a5ed5f05b18b37bcf39854468b81728247acd
+    organize:
+      cos-tool-amd64: cos-tool-amd64
+    override-prime: |
+      craftctl default
+      chmod 0755 "$CRAFT_PRIME/cos-tool-amd64"
   charm:
     plugin: uv
     source: .

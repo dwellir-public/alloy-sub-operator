@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -12,7 +13,7 @@ MODEL_NAME = "polka-obs"
 MODEL_UUID = "00000000-0000-4000-8000-000000000222"
 
 
-def test_send_remote_write_relation_does_not_publish_tenant_metadata():
+def test_send_remote_write_relation_publishes_empty_rule_state_and_standard_metadata():
     harness = testing.Harness(AlloySubCharm)
     harness.set_leader(True)
     harness.set_model_name(MODEL_NAME)
@@ -28,4 +29,11 @@ def test_send_remote_write_relation_does_not_publish_tenant_metadata():
 
     relation_data = harness.get_relation_data(relation_id, harness.charm.app.name)
 
-    assert relation_data == {}
+    assert json.loads(relation_data["alert_rules"]) == {"groups": []}
+    assert json.loads(relation_data["metadata"]) == {
+        "application": "alloy-sub",
+        "model": MODEL_NAME,
+        "model_uuid": MODEL_UUID,
+        "unit": "alloy-sub/0",
+    }
+    assert "tenant" not in relation_data

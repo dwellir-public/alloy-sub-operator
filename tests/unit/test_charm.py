@@ -9,12 +9,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from ops import testing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
-from charm import AlloySubCharm, relation_urls
+from charm import RULE_CACHE_KEY, AlloySubCharm, relation_urls
 from outbound_endpoints import OutboundEndpoint
 
 LOKI_URL = "http://loki:3100/loki/api/v1/push"
@@ -76,6 +77,113 @@ def _ready_state(*, with_loki=False, with_remote_write=False):
             )
         )
     return testing.State(relations=relations)
+
+
+def _cached_rule_state(*backends):
+    entries = {}
+    for backend in backends:
+        artifact_type = "prometheus_alert_rules" if backend == "prometheus" else "loki_alert_rules"
+        entries[f"{artifact_type}/owned"] = {
+            "backend": backend,
+            "ownership": f"principal-uuid/polkadot/{artifact_type}/owned",
+            "groups": [{"name": f"{backend}-rules", "rules": [{"alert": "Down", "expr": "up == 0"}]}],
+        }
+    return testing.State(
+        leader=True,
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_app_data={"payload": "invalid-current"},
+                local_app_data={RULE_CACHE_KEY: AlloySubCharm._encode_rule_cache(entries)},
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("lifecycle", ["start", "update_status"])
+@pytest.mark.parametrize(
+    ("backends", "missing"),
+    [
+        (("prometheus",), "send-remote-write relation"),
+        (("loki",), "send-loki-logs relation"),
+        (("prometheus", "loki"), "send-remote-write relation and send-loki-logs relation"),
+    ],
+)
+def test_lifecycle_keeps_cached_rules_waiting_for_destinations(lifecycle, backends, missing):
+    ctx = testing.Context(AlloySubCharm)
+
+    def configure(charm, **_kwargs):
+        charm.unit.status = testing.ActiveStatus("configured")
+        return True
+
+    event = ctx.on.start() if lifecycle == "start" else ctx.on.update_status()
+    with (
+        patch.object(AlloySubCharm, "_configure", configure),
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(event, _cached_rule_state(*backends))
+
+    assert state_out.unit_status == testing.WaitingStatus(f"Alloy service running; config valid; waiting for {missing}")
+
+
+@pytest.mark.parametrize("lifecycle", ["start", "update_status"])
+def test_lifecycle_rule_reconcile_preserves_blocked_config_status(lifecycle):
+    ctx = testing.Context(AlloySubCharm)
+    event = ctx.on.start() if lifecycle == "start" else ctx.on.update_status()
+    with (
+        patch.object(
+            AlloySubCharm,
+            "_configure",
+            side_effect=RuntimeError("broken config"),
+        ),
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(event, _cached_rule_state("prometheus"))
+
+    assert state_out.unit_status == testing.BlockedStatus("Alloy service running; config invalid: broken config")
+
+
+@pytest.mark.parametrize("lifecycle", ["start", "update_status"])
+def test_lifecycle_rule_reconcile_preserves_existing_waiting_status(lifecycle):
+    ctx = testing.Context(AlloySubCharm)
+
+    def configure(charm, **_kwargs):
+        charm.unit.status = testing.WaitingStatus("upstream waiting")
+        return False
+
+    event = ctx.on.start() if lifecycle == "start" else ctx.on.update_status()
+    with (
+        patch.object(AlloySubCharm, "_configure", configure),
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(event, _cached_rule_state("prometheus"))
+
+    assert state_out.unit_status == testing.WaitingStatus("upstream waiting")
+
+
+def test_update_status_rule_reconcile_preserves_connectivity_blocked_status():
+    ctx = testing.Context(AlloySubCharm)
+
+    def configure(charm, **_kwargs):
+        charm.unit.status = testing.ActiveStatus("configured")
+        return True
+
+    with (
+        patch.object(AlloySubCharm, "_configure", configure),
+        patch.object(AlloySubCharm, "_grafana_cloud_status_error", return_value="connectivity failed"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(ctx.on.update_status(), _cached_rule_state("prometheus"))
+
+    assert state_out.unit_status == testing.BlockedStatus("Alloy service running; connectivity failed")
 
 
 def test_start_becomes_active_when_required_relations_present():

@@ -14,30 +14,158 @@ vendor-copied into other charms to keep the contract in sync.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import gzip
+import hashlib
+import hmac
+import io
 import json
 import logging
+import zlib
+from collections.abc import Iterable
 from typing import Any, Callable, Literal, Optional
 
 from ops.charm import CharmBase, HookEvent, RelationBrokenEvent, RelationChangedEvent
 from ops.framework import EventBase, EventSource, Object, ObjectEvents
 from ops.model import Relation
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 logger = logging.getLogger(__name__)
 
 LIBID = "0b7d5c45f19b4b4b9876db265b31af48"
 LIBAPI = 0
-LIBPATCH = 4
+LIBPATCH = 5
 
 DEFAULT_RELATION_NAME = "machine-observability"
 MACHINE_OBSERVABILITY_SCHEMA_VERSION_V1 = 1
 MACHINE_OBSERVABILITY_SCHEMA_VERSION_V2 = 2
+MACHINE_OBSERVABILITY_SCHEMA_VERSION_V3 = 3
+MAX_SERIALIZED_PAYLOAD_BYTES = 60 * 1024
+MAX_DECODED_ARTIFACT_BYTES = 1024 * 1024
+MAX_TOTAL_DECODED_ARTIFACT_BYTES = 1024 * 1024
+
+ArtifactType = Literal["prometheus_alert_rules", "loki_alert_rules"]
+
+
+class PayloadTooLargeError(ValueError):
+    """Raised when a serialized relation payload exceeds the configured ceiling."""
+
+
+class ObservabilityArtifact(BaseModel):
+    """A compressed, checksummed observability artifact carried in relation data."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        revalidate_instances="always",
+        strict=True,
+    )
+
+    artifact_type: ArtifactType
+    artifact_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[a-z0-9][a-z0-9._-]*$",
+    )
+    encoding: Literal["gzip+base64"] = "gzip+base64"
+    content: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def encode_artifact(
+    *, artifact_type: ArtifactType, artifact_id: str, content: bytes
+) -> ObservabilityArtifact:
+    """Encode bytes as a deterministic gzip/base64 artifact with a SHA-256 digest."""
+
+    if len(content) > MAX_DECODED_ARTIFACT_BYTES:
+        raise ValueError(
+            f"artifact {artifact_id!r} exceeds encode size limit "
+            f"of {MAX_DECODED_ARTIFACT_BYTES} bytes"
+        )
+
+    compressed = io.BytesIO()
+    with gzip.GzipFile(
+        fileobj=compressed,
+        mode="wb",
+        filename="",
+        mtime=0,
+    ) as gzip_file:
+        gzip_file.write(content)
+
+    return ObservabilityArtifact(
+        artifact_type=artifact_type,
+        artifact_id=artifact_id,
+        content=base64.b64encode(compressed.getvalue()).decode("ascii"),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+
+
+def decode_artifact(artifact: ObservabilityArtifact) -> bytes:
+    """Decode a bounded artifact and verify its digest against the original bytes."""
+
+    try:
+        compressed = base64.b64decode(artifact.content, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError(f"invalid base64 for artifact {artifact.artifact_id!r}") from exc
+
+    decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    content = bytearray()
+    for offset in range(0, len(compressed), 8192):
+        pending = compressed[offset : offset + 8192]
+        while pending:
+            remaining_bytes = MAX_DECODED_ARTIFACT_BYTES - len(content)
+            try:
+                decoded = decompressor.decompress(pending, remaining_bytes + 1)
+            except zlib.error as exc:
+                raise ValueError(
+                    f"invalid gzip for artifact {artifact.artifact_id!r}"
+                ) from exc
+            pending = decompressor.unconsumed_tail
+            if len(decoded) > remaining_bytes:
+                raise ValueError(
+                    f"artifact {artifact.artifact_id!r} exceeds decoded size limit "
+                    f"of {MAX_DECODED_ARTIFACT_BYTES} bytes"
+                )
+            content.extend(decoded)
+            if decompressor.unused_data:
+                raise ValueError(
+                    f"invalid trailing gzip data for artifact {artifact.artifact_id!r}"
+                )
+
+    if not decompressor.eof:
+        raise ValueError(f"invalid gzip for artifact {artifact.artifact_id!r}")
+
+    actual_sha256 = hashlib.sha256(content).hexdigest()
+    if not hmac.compare_digest(actual_sha256, artifact.sha256):
+        raise ValueError(f"checksum mismatch for artifact {artifact.artifact_id!r}")
+
+    return bytes(content)
+
+
+def validate_artifacts(
+    artifacts: Iterable[ObservabilityArtifact],
+    *,
+    maximum_decoded_bytes: int = MAX_TOTAL_DECODED_ARTIFACT_BYTES,
+) -> int:
+    """Validate artifacts sequentially while enforcing their aggregate decoded size."""
+
+    total_decoded_bytes = 0
+    for artifact in artifacts:
+        validated = ObservabilityArtifact.model_validate(artifact)
+        decoded_size = len(decode_artifact(validated))
+        total_decoded_bytes += decoded_size
+        if total_decoded_bytes > maximum_decoded_bytes:
+            raise ValueError(
+                "aggregate decoded artifacts exceed total size limit "
+                f"of {maximum_decoded_bytes} bytes at artifact {validated.artifact_id!r}"
+            )
+    return total_decoded_bytes
 
 
 class MetricsEndpoint(BaseModel):
     """One metrics scrape endpoint declared by a principal charm."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     targets: list[str]
     path: str = "/metrics"
@@ -50,7 +178,7 @@ class MetricsEndpoint(BaseModel):
 class LogFileSource(BaseModel):
     """A file log source declared by a principal charm."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     include: list[str] = Field(default_factory=list)
     exclude: list[str] = Field(default_factory=list)
@@ -60,7 +188,7 @@ class LogFileSource(BaseModel):
 class SourceTopology(BaseModel):
     """Explicit Juju topology for the workload that owns the declared sources."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     model: str = ""
     model_uuid: str = ""
@@ -72,11 +200,12 @@ class SourceTopology(BaseModel):
 class MachineObservabilityPayload(BaseModel):
     """Neutral source declarations from a principal charm."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", revalidate_instances="always")
 
     schema_version: Literal[
         MACHINE_OBSERVABILITY_SCHEMA_VERSION_V1,
         MACHINE_OBSERVABILITY_SCHEMA_VERSION_V2,
+        MACHINE_OBSERVABILITY_SCHEMA_VERSION_V3,
     ] = (
         MACHINE_OBSERVABILITY_SCHEMA_VERSION_V1
     )
@@ -86,6 +215,59 @@ class MachineObservabilityPayload(BaseModel):
     systemd_units: list[str] = Field(default_factory=list)
     journal_match_expressions: list[str] = Field(default_factory=list)
     log_files: list[LogFileSource] = Field(default_factory=list)
+    artifacts: list[ObservabilityArtifact] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def reject_duplicate_artifact_identities(self) -> "MachineObservabilityPayload":
+        """Reject artifacts sharing the same type and identifier."""
+
+        if (
+            self.schema_version != MACHINE_OBSERVABILITY_SCHEMA_VERSION_V3
+            and self.artifacts
+        ):
+            raise ValueError("artifacts require schema version 3")
+
+        identities: set[tuple[ArtifactType, str]] = set()
+        for artifact in self.artifacts:
+            identity = (artifact.artifact_type, artifact.artifact_id)
+            if identity in identities:
+                raise ValueError(
+                    "duplicate artifact identity: "
+                    f"{artifact.artifact_type}/{artifact.artifact_id}"
+                )
+            identities.add(identity)
+        return self
+
+
+def serialize_machine_observability_payload(
+    payload: MachineObservabilityPayload | dict[str, Any],
+    *,
+    maximum_bytes: int = MAX_SERIALIZED_PAYLOAD_BYTES,
+) -> str:
+    """Serialize a payload deterministically and enforce its UTF-8 byte ceiling."""
+
+    validated = MachineObservabilityPayload.model_validate(payload)
+    validate_artifacts(validated.artifacts)
+    excluded_fields = (
+        {"artifacts"}
+        if validated.schema_version != MACHINE_OBSERVABILITY_SCHEMA_VERSION_V3
+        else set()
+    )
+    serializable = validated.model_dump(mode="json", exclude=excluded_fields)
+
+    serialized = json.dumps(
+        serializable,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    serialized_bytes = len(serialized.encode("utf-8"))
+    if serialized_bytes > maximum_bytes:
+        raise PayloadTooLargeError(
+            f"serialized machine-observability payload is {serialized_bytes} bytes; "
+            f"maximum is {maximum_bytes} bytes (default {MAX_SERIALIZED_PAYLOAD_BYTES})"
+        )
+    return serialized
 
 
 class MachineObservabilityProviderAppData(BaseModel):
@@ -189,13 +371,8 @@ class MachineObservabilityProvider(Object):
         if self.model.app is None:
             return
 
-        serializable = (
-            payload.model_dump(mode="json")
-            if isinstance(payload, MachineObservabilityPayload)
-            else payload
-        )
         provider_data = MachineObservabilityProviderAppData(
-            payload=json.dumps(serializable, sort_keys=True)
+            payload=serialize_machine_observability_payload(payload)
         )
         for relation in self.model.relations.get(self._relation_name, []):
             provider_data.dump(relation.data[self.model.app])
