@@ -1,4 +1,5 @@
 import copy
+import collections
 import json
 import re
 import subprocess
@@ -481,6 +482,28 @@ def test_sanitized_group_names_remain_unique_and_input_order_independent():
     assert forward == reverse
 
 
+def test_group_collision_counts_are_computed_once_and_remain_deterministic(monkeypatch):
+    import alert_rules
+
+    counter_calls = 0
+
+    def count_names(values):
+        nonlocal counter_calls
+        counter_calls += 1
+        return collections.Counter(values)
+
+    monkeypatch.setattr(alert_rules, "Counter", count_names)
+    groups = [_group("same/name", f"up == {index}") for index in range(64)]
+
+    forward = build_rule_state(_payload(_artifact("prometheus_alert_rules", "node.rules", groups)))
+    reverse = build_rule_state(_payload(_artifact("prometheus_alert_rules", "node.rules", list(reversed(groups)))))
+
+    assert counter_calls == 2
+    assert forward == reverse
+    names = [group["name"] for group in next(iter(forward.prometheus.values()))]
+    assert len(names) == len(set(names)) == len(groups)
+
+
 def test_rule_document_allows_unrelated_top_level_metadata():
     artifact = encode_artifact(
         artifact_type="prometheus_alert_rules",
@@ -527,6 +550,49 @@ def test_rule_document_schema_is_validated(content, category):
 
     assert result.prometheus == {}
     assert result.errors == (f"prometheus_alert_rules/bad-schema: {category}",)
+
+
+@pytest.mark.parametrize("limit_kind", ["groups", "rules-per-group", "total-rules"])
+def test_rule_document_work_limits_reject_before_transform_and_backend_validation(monkeypatch, limit_kind):
+    import alert_rules
+
+    if limit_kind == "groups":
+        groups = [{"name": f"group-{index}", "rules": []} for index in range(129)]
+    elif limit_kind == "rules-per-group":
+        groups = [{"name": "group", "rules": [{"alert": f"Alert{index}", "expr": "up"} for index in range(129)]}]
+    else:
+        groups = [
+            {
+                "name": f"group-{group_index}",
+                "rules": [
+                    {"alert": f"Alert{group_index}_{rule_index}", "expr": "up"}
+                    for rule_index in range(128 if group_index < 8 else 1)
+                ],
+            }
+            for group_index in range(9)
+        ]
+    artifact = _raw_artifact("prometheus_alert_rules", "bounded", json.dumps({"groups": groups}))
+    transform_calls = 0
+    validation_calls = 0
+    original_transform = alert_rules._transform_groups
+
+    def transform(*args, **kwargs):
+        nonlocal transform_calls
+        transform_calls += 1
+        return original_transform(*args, **kwargs)
+
+    def validator(_artifact_type, _groups):
+        nonlocal validation_calls
+        validation_calls += 1
+        return True
+
+    monkeypatch.setattr(alert_rules, "_transform_groups", transform)
+
+    result = _build_rule_state(_payload(artifact), validator=validator)
+
+    assert result.errors == ("prometheus_alert_rules/bounded: size",)
+    assert transform_calls == 0
+    assert validation_calls == 0
 
 
 @pytest.mark.parametrize("failure", ["checksum", "encoding", "json", "schema"])

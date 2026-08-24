@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import zlib
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +60,10 @@ RuleValidator = Callable[[str, list[dict[str, object]]], bool]
 MAX_RULE_ARTIFACTS = 32
 # Bound per-reconcile detail/log fan-out; one aggregate truncation summary may follow.
 MAX_RULE_ERROR_DETAILS = 16
+# Bound schema validation and transformation work within each decoded artifact.
+MAX_RULE_GROUPS_PER_ARTIFACT = 128
+MAX_RULES_PER_GROUP = 128
+MAX_RULES_PER_ARTIFACT = 1024
 _MAX_VALIDATION_CALLS = 32
 _VALIDATION_BUDGET_SECONDS = 15.0
 _VALIDATION_PROCESS_TIMEOUT_SECONDS = 3.0
@@ -200,7 +205,17 @@ def _validate_rule_document(document: Any) -> list[dict[str, object]]:
     groups = document["groups"]
     if not isinstance(groups, list):
         raise ValueError("schema")
+    if len(groups) > MAX_RULE_GROUPS_PER_ARTIFACT:
+        raise ValueError("limit")
+    total_rules = 0
     for group in groups:
+        if isinstance(group, dict) and isinstance(group.get("rules"), list):
+            rule_count = len(group["rules"])
+            if rule_count > MAX_RULES_PER_GROUP:
+                raise ValueError("limit")
+            total_rules += rule_count
+            if total_rules > MAX_RULES_PER_ARTIFACT:
+                raise ValueError("limit")
         _validate_group(group)
     return groups
 
@@ -343,10 +358,10 @@ def _transform_groups(
         transformed.append((base_name, original_key, group))
 
     name_counts: dict[str, int] = {}
+    base_name_counts = Counter(item[0] for item in transformed)
     result: list[dict[str, object]] = []
     for base_name, original_key, group in sorted(transformed, key=lambda item: (item[0], item[1])):
-        matching_count = sum(item[0] == base_name for item in transformed)
-        if matching_count > 1:
+        if base_name_counts[base_name] > 1:
             digest = hashlib.sha256(original_key.encode()).hexdigest()[:8]
             occurrence = name_counts.get(f"{base_name}-{digest}", 0) + 1
             name_counts[f"{base_name}-{digest}"] = occurrence
