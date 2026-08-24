@@ -24,7 +24,6 @@ from pydantic_core import from_json
 try:
     from charms.dwellir_observability.v0.machine_observability import (
         MAX_SERIALIZED_PAYLOAD_BYTES,
-        MachineObservabilityConsumer,
         MachineObservabilityPayload,
         MetricsEndpoint,
         PayloadTooLargeError,
@@ -55,7 +54,6 @@ try:
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
         MAX_SERIALIZED_PAYLOAD_BYTES,
-        MachineObservabilityConsumer,
         MachineObservabilityPayload,
         MetricsEndpoint,
         PayloadTooLargeError,
@@ -118,17 +116,6 @@ def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPaylo
     return load_machine_observability_payload(relation_view)
 
 
-class AlloyMachineObservabilityConsumer(MachineObservabilityConsumer):
-    """Use Alloy Sub's bounded, artifact-isolated telemetry decoder."""
-
-    def _validated_payload(self, relation: ops.Relation) -> MachineObservabilityPayload | None:
-        try:
-            return _load_telemetry_payload(relation)
-        except (ValueError, PayloadTooLargeError):
-            logger.warning("Invalid machine-observability telemetry payload on relation %s", relation.id)
-            return None
-
-
 logger = logging.getLogger(__name__)
 
 RULE_CACHE_KEY = "_alloy_sub_rule_state_v1"
@@ -158,20 +145,6 @@ def _valid_ownership_component(value: object) -> bool:
         and "/" not in value
         and value.isprintable()
     )
-
-
-class _MachineObservabilityLogFilter(logging.Filter):
-    """Redact canonical consumer validation details that may contain artifact input."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        """Replace detailed validation output with its relation-scoped category."""
-        if record.name == "charms.dwellir_observability.v0.machine_observability" and str(record.msg).startswith(
-            "Invalid machine-observability payload on relation"
-        ):
-            relation_id = record.args[0] if isinstance(record.args, tuple) and record.args else "unknown"
-            record.msg = "Invalid machine-observability payload on relation %s: validation"
-            record.args = (relation_id,)
-        return True
 
 
 def merge_file_excludes(file_log_excludes: list[str], path_exclude: str) -> list[str]:
@@ -267,11 +240,7 @@ class AlloySubCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
-        consumer_logger = logging.getLogger("charms.dwellir_observability.v0.machine_observability")
-        if not any(isinstance(item, _MachineObservabilityLogFilter) for item in consumer_logger.filters):
-            consumer_logger.addFilter(_MachineObservabilityLogFilter())
         self._stored.set_default(last_good_config="", last_custom_args="")
-        self.machine_observability_consumer = AlloyMachineObservabilityConsumer(self)
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
         self._rule_validator = CosToolRuleValidator()
 

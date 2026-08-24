@@ -196,15 +196,20 @@ def test_deep_payload_update_retains_applied_config(monkeypatch):
     import src.charm as charm_module
 
     writes = []
-    monkeypatch.setattr(charm_module.alloy, "ensure_config_dir_permissions", lambda: None)
-    monkeypatch.setattr(charm_module.alloy, "write_config_text", writes.append)
+
+    def capture_config(*args, **kwargs):
+        writes.append(args[0] if args else kwargs["config_text"])
+
+    monkeypatch.setattr(charm_module.alloy, "ensure_config_dir_permissions", lambda *_: None)
+    monkeypatch.setattr(charm_module.alloy, "write_config_text", capture_config)
     monkeypatch.setattr(charm_module.alloy, "write_custom_args", lambda *_: None)
     monkeypatch.setattr(charm_module.alloy, "custom_args_applied", lambda *_: True)
     monkeypatch.setattr(charm_module.alloy, "verify_config", lambda **_: None)
-    monkeypatch.setattr(charm_module.alloy, "is_active", lambda: True)
-    monkeypatch.setattr(charm_module.alloy, "reload", lambda: None)
-    monkeypatch.setattr(charm_module.alloy, "restart", lambda: None)
+    monkeypatch.setattr(charm_module.alloy, "is_active", lambda *_: True)
+    monkeypatch.setattr(charm_module.alloy, "reload", lambda *_: None)
+    monkeypatch.setattr(charm_module.alloy, "restart", lambda *_: None)
     harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
     harness.begin()
     juju_info = harness.add_relation("juju-info", "polkadot")
     harness.add_relation_unit(juju_info, "polkadot/0")
@@ -213,11 +218,58 @@ def test_deep_payload_update_retains_applied_config(monkeypatch):
     valid["systemd_units"] = ["snap.polkadot.service"]
     harness.update_relation_data(machine, "polkadot", {"payload": json.dumps(valid)})
     previous_writes = list(writes)
+    assert previous_writes
     deep = '{"schema_version":3,"artifacts":' + "[" * 10_000 + "]" * 10_000 + "}"
 
     harness.update_relation_data(machine, "polkadot", {"payload": deep})
 
     assert writes == previous_writes
+
+
+@pytest.mark.parametrize(
+    "raw_payload",
+    [
+        '{"schema_version":3,"artifacts":[]}',
+        "{",
+        '{"schema_version":3,"artifacts":' + "[" * 10_000 + "]" * 10_000 + "}",
+    ],
+)
+def test_relation_changed_has_one_telemetry_and_one_rule_decode(monkeypatch, raw_payload):
+    import src.charm as charm_module
+
+    original_parser = charm_module.parse_machine_observability_payload_json
+    parser_calls = 0
+
+    def counted_parser(raw):
+        nonlocal parser_calls
+        parser_calls += 1
+        return original_parser(raw)
+
+    monkeypatch.setattr(charm_module, "parse_machine_observability_payload_json", counted_parser)
+    monkeypatch.setattr(charm_module.alloy, "ensure_config_dir_permissions", lambda *_: None)
+    monkeypatch.setattr(charm_module.alloy, "write_config_text", lambda *_, **__: None)
+    monkeypatch.setattr(charm_module.alloy, "write_custom_args", lambda *_, **__: None)
+    monkeypatch.setattr(charm_module.alloy, "custom_args_applied", lambda *_, **__: True)
+    monkeypatch.setattr(charm_module.alloy, "verify_config", lambda **_: None)
+    monkeypatch.setattr(charm_module.alloy, "is_active", lambda: True)
+    monkeypatch.setattr(charm_module.alloy, "reload", lambda *_, **__: None)
+    monkeypatch.setattr(charm_module.alloy, "restart", lambda *_, **__: None)
+    harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
+    harness.begin()
+    juju_info = harness.add_relation("juju-info", "polkadot")
+    harness.add_relation_unit(juju_info, "polkadot/0")
+    machine = harness.add_relation("machine-observability", "polkadot")
+    parser_calls = 0
+
+    harness.update_relation_data(machine, "polkadot", {"payload": raw_payload})
+
+    assert parser_calls == 2
+    assert not hasattr(harness.charm, "machine_observability_consumer")
+
+    parser_calls = 0
+    harness.update_relation_data(machine, "polkadot", {"payload": '{"schema_version":3,"artifacts":[]} '})
+    assert parser_calls == 2
 
 
 def test_provider_publishes_payload_on_relation_created():
