@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import TypeAlias, cast
 
 import ops
+from pydantic_core import from_json
 
 try:
     from charms.dwellir_observability.v0.machine_observability import (
@@ -84,6 +85,10 @@ except ImportError:
     from principal_context import PrincipalContext
 
 
+class PayloadDecodeError(ValueError):
+    """Represent a safely categorized, bounded JSON decode failure."""
+
+
 def parse_machine_observability_payload_json(raw_payload: str) -> object:
     """Parse relation JSON after enforcing Alloy Sub's raw payload ceiling."""
     payload_bytes = len(raw_payload.encode("utf-8"))
@@ -92,7 +97,10 @@ def parse_machine_observability_payload_json(raw_payload: str) -> object:
             f"serialized machine-observability payload is {payload_bytes} bytes; "
             f"maximum is {MAX_SERIALIZED_PAYLOAD_BYTES} bytes"
         )
-    return json.loads(raw_payload)
+    try:
+        return from_json(raw_payload)
+    except ValueError as exc:
+        raise PayloadDecodeError("json") from exc
 
 
 def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPayload:
@@ -108,6 +116,17 @@ def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPaylo
         parsed = {**parsed, "artifacts": []}
     relation_view = SimpleNamespace(remote_app_data={"payload": json.dumps(parsed)})
     return load_machine_observability_payload(relation_view)
+
+
+class AlloyMachineObservabilityConsumer(MachineObservabilityConsumer):
+    """Use Alloy Sub's bounded, artifact-isolated telemetry decoder."""
+
+    def _validated_payload(self, relation: ops.Relation) -> MachineObservabilityPayload | None:
+        try:
+            return _load_telemetry_payload(relation)
+        except (ValueError, PayloadTooLargeError):
+            logger.warning("Invalid machine-observability telemetry payload on relation %s", relation.id)
+            return None
 
 
 logger = logging.getLogger(__name__)
@@ -252,7 +271,7 @@ class AlloySubCharm(ops.CharmBase):
         if not any(isinstance(item, _MachineObservabilityLogFilter) for item in consumer_logger.filters):
             consumer_logger.addFilter(_MachineObservabilityLogFilter())
         self._stored.set_default(last_good_config="", last_custom_args="")
-        self.machine_observability_consumer = MachineObservabilityConsumer(self)
+        self.machine_observability_consumer = AlloyMachineObservabilityConsumer(self)
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
         self._rule_validator = CosToolRuleValidator()
 
@@ -440,7 +459,7 @@ class AlloySubCharm(ops.CharmBase):
         raw_payload = relation.data[relation.app].get("payload", "{}") if relation.app else "{}"
         try:
             payload = parse_machine_observability_payload_json(raw_payload)
-        except (json.JSONDecodeError, PayloadTooLargeError) as exc:
+        except (PayloadDecodeError, PayloadTooLargeError) as exc:
             category = "size" if isinstance(exc, PayloadTooLargeError) else "json"
             logger.warning(
                 "Invalid machine-observability rule payload on relation %s: %s",
@@ -811,7 +830,15 @@ class AlloySubCharm(ops.CharmBase):
 
     def _configure(self, *, active_message: str) -> bool:
         """Render, validate, and apply Alloy config from relation data."""
-        principal_context = self._principal_context()
+        try:
+            payload = self._observability_payload()
+        except (PayloadDecodeError, PayloadTooLargeError, ValueError):
+            logger.warning("Invalid machine-observability telemetry payload; retaining current config")
+            self.unit.status = ops.WaitingStatus(
+                self._status_message("config waiting for valid machine-observability payload")
+            )
+            return False
+        principal_context = self._principal_context(payload)
         if principal_context is None:
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
@@ -825,7 +852,6 @@ class AlloySubCharm(ops.CharmBase):
             )
             return False
 
-        payload = self._observability_payload()
         loki_endpoints = self._loki_endpoint_urls()
         remote_write_endpoints = self._remote_write_endpoint_urls()
         waiting_requirements = self._missing_relation_requirements(
@@ -988,7 +1014,7 @@ class AlloySubCharm(ops.CharmBase):
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def _principal_context(self) -> PrincipalContext | None:
+    def _principal_context(self, payload: MachineObservabilityPayload | None = None) -> PrincipalContext | None:
         """Return principal context from juju-info, falling back to v2 source topology."""
         relation = self.model.get_relation("juju-info")
         if relation is not None and relation.units:
@@ -997,7 +1023,8 @@ class AlloySubCharm(ops.CharmBase):
                 model_name=self.model.name,
                 model_uuid=self.model.uuid,
             )
-        topology = self._observability_payload().source_topology
+        payload = payload if payload is not None else self._observability_payload()
+        topology = payload.source_topology
         if topology is not None:
             return PrincipalContext.from_source_topology(
                 topology,
@@ -1006,7 +1033,7 @@ class AlloySubCharm(ops.CharmBase):
             )
         return None
 
-    def _observability_payload(self):
+    def _observability_payload(self) -> MachineObservabilityPayload:
         """Return the current machine-observability payload if present."""
         relations = sorted(
             self.model.relations.get("machine-observability", []),
@@ -1014,14 +1041,7 @@ class AlloySubCharm(ops.CharmBase):
         )
         if not relations:
             return MachineObservabilityPayload()
-        try:
-            return _load_telemetry_payload(relations[0])
-        except (ValueError, PayloadTooLargeError):
-            logger.warning(
-                "Invalid machine-observability telemetry payload on relation %s",
-                relations[0].id,
-            )
-            return MachineObservabilityPayload()
+        return _load_telemetry_payload(relations[0])
 
     def _has_machine_observability_relation(self) -> bool:
         """Return whether the machine-observability relation is currently present."""

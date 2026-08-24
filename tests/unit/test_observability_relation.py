@@ -25,7 +25,7 @@ from charms.dwellir_observability.v0.machine_observability import (
     load_machine_observability_payload,
 )
 
-from src.charm import AlloySubCharm, parse_machine_observability_payload_json
+from src.charm import AlloySubCharm, PayloadDecodeError, parse_machine_observability_payload_json
 from src.principal_context import PrincipalContext
 
 
@@ -184,6 +184,40 @@ def test_alloy_payload_parser_allows_exact_limit_and_rejects_one_extra_byte():
     assert parse_machine_observability_payload_json(exact_payload) == {"schema_version": 1}
     with pytest.raises(PayloadTooLargeError):
         parse_machine_observability_payload_json(exact_payload + " ")
+
+
+@pytest.mark.parametrize("raw", ["{", '{"schema_version":3,"artifacts":' + "[" * 10_000 + "]" * 10_000 + "}"])
+def test_alloy_payload_parser_normalizes_invalid_and_deep_json(raw):
+    with pytest.raises(PayloadDecodeError):
+        parse_machine_observability_payload_json(raw)
+
+
+def test_deep_payload_update_retains_applied_config(monkeypatch):
+    import src.charm as charm_module
+
+    writes = []
+    monkeypatch.setattr(charm_module.alloy, "ensure_config_dir_permissions", lambda: None)
+    monkeypatch.setattr(charm_module.alloy, "write_config_text", writes.append)
+    monkeypatch.setattr(charm_module.alloy, "write_custom_args", lambda *_: None)
+    monkeypatch.setattr(charm_module.alloy, "custom_args_applied", lambda *_: True)
+    monkeypatch.setattr(charm_module.alloy, "verify_config", lambda **_: None)
+    monkeypatch.setattr(charm_module.alloy, "is_active", lambda: True)
+    monkeypatch.setattr(charm_module.alloy, "reload", lambda: None)
+    monkeypatch.setattr(charm_module.alloy, "restart", lambda: None)
+    harness = testing.Harness(AlloySubCharm)
+    harness.begin()
+    juju_info = harness.add_relation("juju-info", "polkadot")
+    harness.add_relation_unit(juju_info, "polkadot/0")
+    machine = harness.add_relation("machine-observability", "polkadot")
+    valid = _v3_payload()
+    valid["systemd_units"] = ["snap.polkadot.service"]
+    harness.update_relation_data(machine, "polkadot", {"payload": json.dumps(valid)})
+    previous_writes = list(writes)
+    deep = '{"schema_version":3,"artifacts":' + "[" * 10_000 + "]" * 10_000 + "}"
+
+    harness.update_relation_data(machine, "polkadot", {"payload": deep})
+
+    assert writes == previous_writes
 
 
 def test_provider_publishes_payload_on_relation_created():
@@ -700,6 +734,12 @@ def test_oversized_payload_retains_rule_lkg_and_next_valid_payload_converges(mon
 
     harness.update_relation_data(machine, "polkadot", {"payload": oversized})
 
+    groups = json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"])["groups"]
+    assert len(groups) == 1
+    assert groups[0]["name"].endswith("good-V1")
+
+    deep = '{"schema_version":3,"artifacts":' + "[" * 10_000 + "]" * 10_000 + "}"
+    harness.update_relation_data(machine, "polkadot", {"payload": deep})
     groups = json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"])["groups"]
     assert len(groups) == 1
     assert groups[0]["name"].endswith("good-V1")
@@ -1350,7 +1390,7 @@ def test_configure_log_does_not_include_artifact_content(monkeypatch, caplog):
     harness.begin()
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(harness.charm, "_has_machine_observability_relation", lambda: True)
-    monkeypatch.setattr(harness.charm, "_principal_context", lambda: context)
+    monkeypatch.setattr(harness.charm, "_principal_context", lambda _payload=None: context)
     monkeypatch.setattr(harness.charm, "_observability_payload", lambda: payload)
     monkeypatch.setattr(harness.charm, "_validate_config", lambda _: None)
     monkeypatch.setattr(charm_module.alloy, "ensure_config_dir_permissions", lambda _: None)

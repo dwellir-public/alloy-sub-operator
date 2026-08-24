@@ -749,7 +749,7 @@ def test_configure_restarts_alloy_when_custom_args_change():
     fake_charm = SimpleNamespace(
         unit=SimpleNamespace(status=None),
         _stored=SimpleNamespace(last_good_config="", last_custom_args=""),
-        _principal_context=lambda: SimpleNamespace(
+        _principal_context=lambda _payload=None: SimpleNamespace(
             juju_labels=lambda charm_name=None: {"juju_charm": charm_name or "polkadot"}
         ),
         _observability_payload=lambda: SimpleNamespace(
@@ -807,7 +807,7 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
             last_good_config="",
             last_custom_args="--server.http.listen-addr=0.0.0.0:6987",
         ),
-        _principal_context=lambda: SimpleNamespace(
+        _principal_context=lambda _payload=None: SimpleNamespace(
             juju_labels=lambda charm_name=None: {"juju_charm": charm_name or "polkadot"}
         ),
         _observability_payload=lambda: SimpleNamespace(
@@ -865,7 +865,7 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
             last_good_config="",
             last_custom_args="--server.http.listen-addr=0.0.0.0:6987",
         ),
-        _principal_context=lambda: SimpleNamespace(
+        _principal_context=lambda _payload=None: SimpleNamespace(
             juju_labels=lambda charm_name=None: {"juju_charm": charm_name or "polkadot"}
         ),
         _observability_payload=lambda: SimpleNamespace(
