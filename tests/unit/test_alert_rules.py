@@ -1,5 +1,5 @@
-import copy
 import collections
+import copy
 import json
 import re
 import subprocess
@@ -836,8 +836,7 @@ def test_rule_error_details_and_overflow_summary_are_bounded():
     import alert_rules
 
     artifacts = [
-        {"artifact_type": "prometheus_alert_rules", "artifact_id": f"rule-{index:03d}"}
-        for index in range(500)
+        {"artifact_type": "prometheus_alert_rules", "artifact_id": f"rule-{index:03d}"} for index in range(500)
     ]
 
     result = build_rule_state(_payload(*artifacts))

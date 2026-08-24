@@ -422,6 +422,12 @@ def _append_bounded_error(errors: list[str], error: str) -> bool:
     return False
 
 
+def _append_truncation_summary(errors: list[str], suppressed_errors: int) -> None:
+    """Append the single aggregate summary when error details were suppressed."""
+    if suppressed_errors:
+        errors.append(f"artifacts: truncated ({suppressed_errors} additional errors)")
+
+
 def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) -> RuleBuildResult:
     """Decode each v3 artifact independently into deterministic backend state."""
     if _value(payload, "schema_version", 1) != 3:
@@ -490,8 +496,7 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
             continue
         suppressed_errors += _append_bounded_error(errors, f"{artifact_type}/{artifact_id}: {category}")
 
-    if suppressed_errors:
-        errors.append(f"artifacts: truncated ({suppressed_errors} additional errors)")
+    _append_truncation_summary(errors, suppressed_errors)
     return RuleBuildResult(
         prometheus=dict(sorted(prometheus.items())),
         loki=dict(sorted(loki.items())),

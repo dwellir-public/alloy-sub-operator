@@ -1388,13 +1388,16 @@ def test_invalid_artifact_logs_are_bounded(monkeypatch, caplog):
     harness.begin()
     machine = harness.add_relation("machine-observability", "polkadot")
     artifacts = [
-        {"artifact_type": "prometheus_alert_rules", "artifact_id": f"rule-{index:03d}"}
-        for index in range(500)
+        {"artifact_type": "prometheus_alert_rules", "artifact_id": f"rule-{index:03d}"} for index in range(500)
     ]
 
     harness.update_relation_data(machine, "polkadot", {"payload": json.dumps(_v3_payload(*artifacts))})
 
-    messages = [record.message for record in caplog.records if record.message.startswith("Invalid machine-observability artifact:")]
+    messages = [
+        record.message
+        for record in caplog.records
+        if record.message.startswith("Invalid machine-observability artifact:")
+    ]
     assert len(messages) == alert_rules.MAX_RULE_ERROR_DETAILS + 1
     assert messages[-1].endswith("artifacts: truncated (484 additional errors)")
 
