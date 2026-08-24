@@ -24,6 +24,8 @@ try:
         MachineObservabilityConsumer,
         MachineObservabilityPayload,
         MetricsEndpoint,
+        PayloadTooLargeError,
+        parse_machine_observability_payload_json,
     )
     from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
         GrafanaCloudConfigRequirer,
@@ -52,6 +54,8 @@ except ImportError:
         MachineObservabilityConsumer,
         MachineObservabilityPayload,
         MetricsEndpoint,
+        PayloadTooLargeError,
+        parse_machine_observability_payload_json,
     )
     from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
         GrafanaCloudConfigRequirer,
@@ -405,11 +409,13 @@ class AlloySubCharm(ops.CharmBase):
         """Parse current relation input and apply it to the relation's durable LKG."""
         raw_payload = relation.data[relation.app].get("payload", "{}") if relation.app else "{}"
         try:
-            payload = json.loads(raw_payload)
-        except json.JSONDecodeError:
+            payload = parse_machine_observability_payload_json(raw_payload)
+        except (json.JSONDecodeError, PayloadTooLargeError) as exc:
+            category = "size" if isinstance(exc, PayloadTooLargeError) else "json"
             logger.warning(
-                "Invalid machine-observability rule payload on relation %s: json",
+                "Invalid machine-observability rule payload on relation %s: %s",
                 relation.id,
+                category,
             )
             return None
         return self._build_relation_rule_state(payload, previous, str(relation.id))

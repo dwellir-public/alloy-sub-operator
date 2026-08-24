@@ -270,6 +270,21 @@ def serialize_machine_observability_payload(
     return serialized
 
 
+def parse_machine_observability_payload_json(
+    raw_payload: str,
+    *,
+    maximum_bytes: int = MAX_SERIALIZED_PAYLOAD_BYTES,
+) -> Any:
+    """Parse relation JSON only after enforcing the shared UTF-8 byte ceiling."""
+    payload_bytes = len(raw_payload.encode("utf-8"))
+    if payload_bytes > maximum_bytes:
+        raise PayloadTooLargeError(
+            f"serialized machine-observability payload is {payload_bytes} bytes; "
+            f"maximum is {maximum_bytes} bytes (default {MAX_SERIALIZED_PAYLOAD_BYTES})"
+        )
+    return json.loads(raw_payload)
+
+
 class MachineObservabilityProviderAppData(BaseModel):
     """Application databag model for the provider side of the relation."""
 
@@ -329,7 +344,7 @@ def load_machine_observability_payload(relation: Any) -> MachineObservabilityPay
             return MachineObservabilityPayload()
         raw_payload = relation.data[app].get("payload", "{}")
 
-    return MachineObservabilityPayload.model_validate(json.loads(raw_payload))
+    return MachineObservabilityPayload.model_validate(parse_machine_observability_payload_json(raw_payload))
 
 
 class MachineObservabilityProvider(Object):
@@ -460,7 +475,7 @@ class MachineObservabilityConsumer(Object):
     ) -> Optional[MachineObservabilityPayload]:
         try:
             return load_machine_observability_payload(relation)
-        except (ValidationError, json.JSONDecodeError) as exc:
+        except (ValidationError, json.JSONDecodeError, PayloadTooLargeError) as exc:
             logger.warning(
                 "Invalid machine-observability payload on relation %s: %s",
                 relation.id,

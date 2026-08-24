@@ -15,8 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
 from charms.dwellir_observability.v0.machine_observability import (
+    MAX_SERIALIZED_PAYLOAD_BYTES,
     MachineObservabilityPayload,
     MachineObservabilityProvider,
+    PayloadTooLargeError,
     SourceTopology,
     build_machine_observability_payload,
     encode_artifact,
@@ -173,6 +175,26 @@ def test_load_machine_observability_payload_reads_remote_app_payload():
     assert payload.schema_version == 1
     assert payload.log_files[0].include == ["/var/log/polkadot/*.log"]
     assert payload.log_files[0].attributes == {"service": "polkadot"}
+
+
+def test_consumer_payload_size_allows_exact_limit_and_rejects_one_extra_byte():
+    base_payload = '{"schema_version":1}'
+    exact_payload = base_payload + " " * (MAX_SERIALIZED_PAYLOAD_BYTES - len(base_payload))
+    exact_relation = testing.Relation(
+        "machine-observability",
+        remote_app_name="polkadot",
+        remote_app_data={"payload": exact_payload},
+    )
+    oversized_relation = testing.Relation(
+        "machine-observability",
+        remote_app_name="polkadot",
+        remote_app_data={"payload": exact_payload + " "},
+    )
+
+    assert len(exact_payload.encode("utf-8")) == MAX_SERIALIZED_PAYLOAD_BYTES
+    assert load_machine_observability_payload(exact_relation).schema_version == 1
+    with pytest.raises(PayloadTooLargeError):
+        load_machine_observability_payload(oversized_relation)
 
 
 def test_provider_publishes_payload_on_relation_created():
@@ -644,6 +666,39 @@ def test_malformed_outer_payload_retains_rules_and_v2_withdraws_them(monkeypatch
         {"payload": json.dumps({"schema_version": 2, "source_topology": _v3_payload()["source_topology"]})},
     )
     assert json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"]) == {"groups": []}
+
+
+def test_oversized_payload_retains_rule_lkg_and_next_valid_payload_converges(monkeypatch):
+    import src.charm as charm_module
+
+    monkeypatch.setattr(charm_module.AlloySubCharm, "_configure", lambda *args, **kwargs: True)
+    harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
+    harness.begin()
+    machine = harness.add_relation("machine-observability", "polkadot")
+    prometheus = harness.add_relation("send-remote-write", "mimir")
+    harness.update_relation_data(
+        machine,
+        "polkadot",
+        {"payload": json.dumps(_v3_payload(_rule_artifact("prometheus_alert_rules", "good", "V1")))},
+    )
+    oversized = json.dumps(_v3_payload())
+    oversized += " " * (MAX_SERIALIZED_PAYLOAD_BYTES + 1 - len(oversized.encode("utf-8")))
+
+    harness.update_relation_data(machine, "polkadot", {"payload": oversized})
+
+    groups = json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"])["groups"]
+    assert len(groups) == 1
+    assert groups[0]["name"].endswith("good-V1")
+
+    harness.update_relation_data(
+        machine,
+        "polkadot",
+        {"payload": json.dumps(_v3_payload(_rule_artifact("prometheus_alert_rules", "good", "V2")))},
+    )
+    groups = json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"])["groups"]
+    assert len(groups) == 1
+    assert groups[0]["name"].endswith("good-V2")
 
 
 @pytest.mark.parametrize(
