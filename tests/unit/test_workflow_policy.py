@@ -59,6 +59,16 @@ def test_release_is_manual_main_only_and_publish_jobs_depend_on_gated_builds():
     assert "always()" not in RELEASE_WORKFLOW.read_text()
 
 
+def test_release_serializes_complete_latest_edge_revision_pairs():
+    workflow = _workflow(RELEASE_WORKFLOW)
+
+    assert workflow["concurrency"] == {
+        "group": "${{ github.workflow }}-latest-edge",
+        "cancel-in-progress": "false",
+    }
+    assert all("concurrency" not in job for job in workflow["jobs"].values())
+
+
 def test_release_preserves_two_base_artifacts_and_publishes_only_latest_edge():
     text = RELEASE_WORKFLOW.read_text()
 

@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-latest-edge
+  cancel-in-progress: false
+
 jobs:
 
   build-ubuntu-22:
