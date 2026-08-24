@@ -1323,6 +1323,27 @@ def test_invalid_artifact_error_log_does_not_include_content(monkeypatch, caplog
     assert "prometheus_alert_rules/bad-encoding: encoding" in caplog.text
 
 
+def test_invalid_artifact_logs_are_bounded(monkeypatch, caplog):
+    import src.alert_rules as alert_rules
+    import src.charm as charm_module
+
+    monkeypatch.setattr(charm_module.AlloySubCharm, "_configure", lambda *args, **kwargs: True)
+    harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
+    harness.begin()
+    machine = harness.add_relation("machine-observability", "polkadot")
+    artifacts = [
+        {"artifact_type": "prometheus_alert_rules", "artifact_id": f"rule-{index:03d}"}
+        for index in range(500)
+    ]
+
+    harness.update_relation_data(machine, "polkadot", {"payload": json.dumps(_v3_payload(*artifacts))})
+
+    messages = [record.message for record in caplog.records if record.message.startswith("Invalid machine-observability artifact:")]
+    assert len(messages) == alert_rules.MAX_RULE_ERROR_DETAILS + 1
+    assert messages[-1].endswith("artifacts: truncated (484 additional errors)")
+
+
 def test_invalid_artifact_identity_does_not_inject_log_content(monkeypatch, caplog):
     import src.charm as charm_module
 

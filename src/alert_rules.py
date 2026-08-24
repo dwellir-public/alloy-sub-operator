@@ -6,6 +6,7 @@ import base64
 import binascii
 import copy
 import hashlib
+import heapq
 import hmac
 import json
 import re
@@ -56,6 +57,8 @@ _LABEL_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _METRIC_NAME_PATTERN = re.compile(r"^[A-Za-z_:][A-Za-z0-9_:]*$")
 RuleValidator = Callable[[str, list[dict[str, object]]], bool]
 MAX_RULE_ARTIFACTS = 32
+# Bound per-reconcile detail/log fan-out; one aggregate truncation summary may follow.
+MAX_RULE_ERROR_DETAILS = 16
 _MAX_VALIDATION_CALLS = 32
 _VALIDATION_BUDGET_SECONDS = 15.0
 _VALIDATION_PROCESS_TIMEOUT_SECONDS = 3.0
@@ -396,6 +399,14 @@ def _backend_accepts(
         return False
 
 
+def _append_bounded_error(errors: list[str], error: str) -> bool:
+    """Append one safe detail within the reporting cap and report suppression."""
+    if len(errors) >= MAX_RULE_ERROR_DETAILS:
+        return True
+    errors.append(error)
+    return False
+
+
 def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) -> RuleBuildResult:
     """Decode each v3 artifact independently into deterministic backend state."""
     if _value(payload, "schema_version", 1) != 3:
@@ -404,12 +415,9 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
     prometheus: dict[str, list[dict[str, object]]] = {}
     loki: dict[str, list[dict[str, object]]] = {}
     errors: list[str] = []
-    artifacts = sorted(
-        _value(payload, "artifacts", []) or [],
-        key=lambda artifact: _identity(artifact),
-    )
-    overflow_artifacts = artifacts[MAX_RULE_ARTIFACTS:]
-    artifacts = artifacts[:MAX_RULE_ARTIFACTS]
+    raw_artifacts = _value(payload, "artifacts", []) or []
+    artifacts = heapq.nsmallest(MAX_RULE_ARTIFACTS, raw_artifacts, key=_identity)
+    suppressed_errors = max(0, len(raw_artifacts) - len(artifacts))
     ownership_topology = _ownership_topology(payload)
     if ownership_topology is None:
         return RuleBuildResult(
@@ -429,7 +437,7 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
             artifact = ObservabilityArtifact.model_validate(raw_artifact)
         except ValidationError as exc:
             category = _validation_category(exc)
-            errors.append(f"{artifact_type}/{artifact_id}: {category}")
+            suppressed_errors += _append_bounded_error(errors, f"{artifact_type}/{artifact_id}: {category}")
             continue
         try:
             decoded = _decode_bounded(
@@ -438,7 +446,7 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
             )
         except _DecodeError as exc:
             decoded_bytes += exc.decoded_bytes
-            errors.append(f"{artifact_type}/{artifact_id}: {exc.category}")
+            suppressed_errors += _append_bounded_error(errors, f"{artifact_type}/{artifact_id}: {exc.category}")
             continue
         decoded_bytes += len(decoded)
         try:
@@ -457,16 +465,18 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
             category = _validation_category(exc)
         else:
             if not _backend_accepts(validator, artifact.artifact_type, transformed):
-                errors.append(f"{artifact_type}/{artifact_id}: validation")
+                suppressed_errors += _append_bounded_error(
+                    errors,
+                    f"{artifact_type}/{artifact_id}: validation",
+                )
                 continue
             target = prometheus if artifact.artifact_type == "prometheus_alert_rules" else loki
             target[ownership] = transformed
             continue
-        errors.append(f"{artifact_type}/{artifact_id}: {category}")
+        suppressed_errors += _append_bounded_error(errors, f"{artifact_type}/{artifact_id}: {category}")
 
-    errors.extend(
-        f"{artifact_type}/{artifact_id}: limit" for artifact_type, artifact_id in map(_identity, overflow_artifacts)
-    )
+    if suppressed_errors:
+        errors.append(f"artifacts: truncated ({suppressed_errors} additional errors)")
     return RuleBuildResult(
         prometheus=dict(sorted(prometheus.items())),
         loki=dict(sorted(loki.items())),

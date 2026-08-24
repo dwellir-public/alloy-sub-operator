@@ -763,9 +763,25 @@ def test_rule_artifact_limit_bounds_decode_parse_and_validation_work(monkeypatch
     assert decode_calls == MAX_RULE_ARTIFACTS
     assert parse_calls == MAX_RULE_ARTIFACTS
     assert validation_calls == MAX_RULE_ARTIFACTS
-    assert len(result.errors) == artifact_count - MAX_RULE_ARTIFACTS
-    assert result.errors[0] == "prometheus_alert_rules/rule-032: limit"
-    assert result.errors[-1] == f"prometheus_alert_rules/rule-{artifact_count - 1:03d}: limit"
+    assert result.errors == (f"artifacts: truncated ({artifact_count - MAX_RULE_ARTIFACTS} additional errors)",)
+
+
+def test_rule_error_details_and_overflow_summary_are_bounded():
+    import alert_rules
+
+    artifacts = [
+        {"artifact_type": "prometheus_alert_rules", "artifact_id": f"rule-{index:03d}"}
+        for index in range(500)
+    ]
+
+    result = build_rule_state(_payload(*artifacts))
+
+    assert len(result.errors) == alert_rules.MAX_RULE_ERROR_DETAILS + 1
+    assert result.errors[:2] == (
+        "prometheus_alert_rules/rule-000: schema",
+        "prometheus_alert_rules/rule-001: schema",
+    )
+    assert result.errors[-1] == "artifacts: truncated (484 additional errors)"
 
 
 def test_publish_rule_groups_writes_full_compact_desired_state_to_every_relation():
