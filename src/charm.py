@@ -695,19 +695,13 @@ class AlloySubCharm(ops.CharmBase):
         identities: list[str] = []
         for artifact in artifacts:
             if not isinstance(artifact, dict):
-                logger.warning(
-                    "Invalid machine-observability rule payload on relation %s: schema",
-                    relation_id,
-                )
-                return None
+                continue
             artifact_type = artifact.get("artifact_type")
             artifact_id = artifact.get("artifact_id")
-            if not isinstance(artifact_type, str) or not isinstance(artifact_id, str):
-                logger.warning(
-                    "Invalid machine-observability rule payload on relation %s: identity",
-                    relation_id,
-                )
-                return None
+            if artifact_type not in _RULE_ARTIFACT_TYPES or not isinstance(artifact_id, str):
+                continue
+            if _CACHE_ARTIFACT_ID_PATTERN.fullmatch(artifact_id) is None:
+                continue
             identities.append(f"{artifact_type}/{artifact_id}")
         if len(identities) != len(set(identities)):
             logger.warning(

@@ -502,6 +502,31 @@ def test_bad_artifact_does_not_block_valid_sibling_and_fixed_payload_converges(m
     assert "checksum" not in harness.charm.unit.status.message
 
 
+def test_unidentifiable_artifact_does_not_block_valid_sibling_update(monkeypatch):
+    import src.charm as charm_module
+
+    monkeypatch.setattr(charm_module.AlloySubCharm, "_configure", lambda *args, **kwargs: True)
+    harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
+    harness.begin()
+    machine = harness.add_relation("machine-observability", "polkadot")
+    prometheus = harness.add_relation("send-remote-write", "mimir")
+
+    harness.update_relation_data(
+        machine,
+        "polkadot",
+        {"payload": json.dumps(_v3_payload(_rule_artifact("prometheus_alert_rules", "sibling", "V1")))},
+    )
+    payload = _v3_payload(_rule_artifact("prometheus_alert_rules", "sibling", "V2"))
+    payload["artifacts"].append(None)
+
+    harness.update_relation_data(machine, "polkadot", {"payload": json.dumps(payload)})
+
+    groups = json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"])["groups"]
+    assert len(groups) == 1
+    assert groups[0]["name"].endswith("sibling-V2")
+
+
 def test_semantically_invalid_rule_retains_artifact_lkg(monkeypatch):
     import src.charm as charm_module
 
