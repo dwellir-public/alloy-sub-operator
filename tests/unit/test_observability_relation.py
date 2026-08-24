@@ -537,16 +537,40 @@ def test_unidentifiable_artifact_does_not_block_valid_sibling_update(monkeypatch
     harness.update_relation_data(
         machine,
         "polkadot",
-        {"payload": json.dumps(_v3_payload(_rule_artifact("prometheus_alert_rules", "sibling", "V1")))},
+        {
+            "payload": json.dumps(
+                _v3_payload(
+                    _rule_artifact("prometheus_alert_rules", "owned", "OWNED-V1"),
+                    _rule_artifact("prometheus_alert_rules", "sibling", "SIBLING-V1"),
+                )
+            )
+        },
     )
-    payload = _v3_payload(_rule_artifact("prometheus_alert_rules", "sibling", "V2"))
+    payload = _v3_payload(_rule_artifact("prometheus_alert_rules", "sibling", "SIBLING-V2"))
     payload["artifacts"].append(None)
 
     harness.update_relation_data(machine, "polkadot", {"payload": json.dumps(payload)})
 
     groups = json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"])["groups"]
+    assert len(groups) == 2
+    assert any(group["name"].endswith("owned-OWNED-V1") for group in groups)
+    assert any(group["name"].endswith("sibling-SIBLING-V2") for group in groups)
+
+    harness.update_relation_data(
+        machine,
+        "polkadot",
+        {"payload": json.dumps(_v3_payload(_rule_artifact("prometheus_alert_rules", "sibling", "SIBLING-V3")))},
+    )
+
+    groups = json.loads(harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"])["groups"]
     assert len(groups) == 1
-    assert groups[0]["name"].endswith("sibling-V2")
+    assert groups[0]["name"].endswith("sibling-SIBLING-V3")
+
+
+def test_duplicate_identifiable_artifacts_remain_an_ambiguous_snapshot():
+    artifact = _rule_artifact("prometheus_alert_rules", "duplicate", "DUPLICATE")
+
+    assert AlloySubCharm._validated_rule_snapshot(_v3_payload(artifact, artifact), "0") is None
 
 
 def test_semantically_invalid_rule_retains_artifact_lkg(monkeypatch):

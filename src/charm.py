@@ -663,14 +663,18 @@ class AlloySubCharm(ops.CharmBase):
         snapshot = self._validated_rule_snapshot(payload, relation_id)
         if snapshot is None:
             return None
-        schema_version, identities = snapshot
+        schema_version, identities, identities_complete = snapshot
         if schema_version in (1, 2):
             return {}
 
         result = build_rule_state(payload, validator=self._validate_artifact_rules)
         for error in result.errors:
             logger.warning("Invalid machine-observability artifact: %s", error)
-        desired = {identity: previous[identity] for identity in identities if identity in previous}
+        desired = (
+            dict(previous)
+            if not identities_complete
+            else {identity: previous[identity] for identity in identities if identity in previous}
+        )
         for backend, ownership_state in (
             ("prometheus", result.prometheus),
             ("loki", result.loki),
@@ -692,21 +696,25 @@ class AlloySubCharm(ops.CharmBase):
     def _validated_rule_snapshot(
         payload: object,
         relation_id: str,
-    ) -> tuple[int, list[str]] | None:
-        """Validate outer payload structure without rejecting individual artifacts."""
+    ) -> tuple[int, list[str], bool] | None:
+        """Return version, safe identities, and whether every artifact was identifiable."""
         header = AlloySubCharm._validated_rule_snapshot_header(payload, relation_id)
         if header is None:
             return None
         schema_version, artifacts = header
         identities: list[str] = []
+        identities_complete = True
         for artifact in artifacts:
             if not isinstance(artifact, dict):
+                identities_complete = False
                 continue
             artifact_type = artifact.get("artifact_type")
             artifact_id = artifact.get("artifact_id")
             if artifact_type not in _RULE_ARTIFACT_TYPES or not isinstance(artifact_id, str):
+                identities_complete = False
                 continue
             if _CACHE_ARTIFACT_ID_PATTERN.fullmatch(artifact_id) is None:
+                identities_complete = False
                 continue
             identities.append(f"{artifact_type}/{artifact_id}")
         if len(identities) != len(set(identities)):
@@ -715,7 +723,7 @@ class AlloySubCharm(ops.CharmBase):
                 relation_id,
             )
             return None
-        return schema_version, identities
+        return schema_version, identities, identities_complete
 
     @staticmethod
     def _validated_rule_snapshot_header(
