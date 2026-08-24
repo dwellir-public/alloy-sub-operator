@@ -15,17 +15,19 @@ import tempfile
 import zlib
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypeAlias, cast
 
 import ops
 
 try:
     from charms.dwellir_observability.v0.machine_observability import (
+        MAX_SERIALIZED_PAYLOAD_BYTES,
         MachineObservabilityConsumer,
         MachineObservabilityPayload,
         MetricsEndpoint,
         PayloadTooLargeError,
-        parse_machine_observability_payload_json,
+        load_machine_observability_payload,
     )
     from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
         GrafanaCloudConfigRequirer,
@@ -51,11 +53,12 @@ try:
     from .principal_context import PrincipalContext
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
+        MAX_SERIALIZED_PAYLOAD_BYTES,
         MachineObservabilityConsumer,
         MachineObservabilityPayload,
         MetricsEndpoint,
         PayloadTooLargeError,
-        parse_machine_observability_payload_json,
+        load_machine_observability_payload,
     )
     from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
         GrafanaCloudConfigRequirer,
@@ -79,6 +82,33 @@ except ImportError:
     from grafanacloud_connectivity import probe_endpoint
     from outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from principal_context import PrincipalContext
+
+
+def parse_machine_observability_payload_json(raw_payload: str) -> object:
+    """Parse relation JSON after enforcing Alloy Sub's raw payload ceiling."""
+    payload_bytes = len(raw_payload.encode("utf-8"))
+    if payload_bytes > MAX_SERIALIZED_PAYLOAD_BYTES:
+        raise PayloadTooLargeError(
+            f"serialized machine-observability payload is {payload_bytes} bytes; "
+            f"maximum is {MAX_SERIALIZED_PAYLOAD_BYTES} bytes"
+        )
+    return json.loads(raw_payload)
+
+
+def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPayload:
+    """Validate telemetry independently of individual v3 rule artifacts."""
+    raw_payload = relation.data[relation.app].get("payload", "{}") if relation.app else "{}"
+    parsed = parse_machine_observability_payload_json(raw_payload)
+    if (
+        isinstance(parsed, dict)
+        and parsed.get("schema_version") == 3
+        and "artifacts" in parsed
+        and isinstance(parsed["artifacts"], list)
+    ):
+        parsed = {**parsed, "artifacts": []}
+    relation_view = SimpleNamespace(remote_app_data={"payload": json.dumps(parsed)})
+    return load_machine_observability_payload(relation_view)
+
 
 logger = logging.getLogger(__name__)
 
@@ -984,7 +1014,14 @@ class AlloySubCharm(ops.CharmBase):
         )
         if not relations:
             return MachineObservabilityPayload()
-        return self.machine_observability_consumer.get_payload(relations[0])
+        try:
+            return _load_telemetry_payload(relations[0])
+        except (ValueError, PayloadTooLargeError):
+            logger.warning(
+                "Invalid machine-observability telemetry payload on relation %s",
+                relations[0].id,
+            )
+            return MachineObservabilityPayload()
 
     def _has_machine_observability_relation(self) -> bool:
         """Return whether the machine-observability relation is currently present."""

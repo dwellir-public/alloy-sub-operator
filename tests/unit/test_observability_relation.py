@@ -25,7 +25,7 @@ from charms.dwellir_observability.v0.machine_observability import (
     load_machine_observability_payload,
 )
 
-from src.charm import AlloySubCharm
+from src.charm import AlloySubCharm, parse_machine_observability_payload_json
 from src.principal_context import PrincipalContext
 
 
@@ -177,24 +177,13 @@ def test_load_machine_observability_payload_reads_remote_app_payload():
     assert payload.log_files[0].attributes == {"service": "polkadot"}
 
 
-def test_consumer_payload_size_allows_exact_limit_and_rejects_one_extra_byte():
+def test_alloy_payload_parser_allows_exact_limit_and_rejects_one_extra_byte():
     base_payload = '{"schema_version":1}'
     exact_payload = base_payload + " " * (MAX_SERIALIZED_PAYLOAD_BYTES - len(base_payload))
-    exact_relation = testing.Relation(
-        "machine-observability",
-        remote_app_name="polkadot",
-        remote_app_data={"payload": exact_payload},
-    )
-    oversized_relation = testing.Relation(
-        "machine-observability",
-        remote_app_name="polkadot",
-        remote_app_data={"payload": exact_payload + " "},
-    )
-
     assert len(exact_payload.encode("utf-8")) == MAX_SERIALIZED_PAYLOAD_BYTES
-    assert load_machine_observability_payload(exact_relation).schema_version == 1
+    assert parse_machine_observability_payload_json(exact_payload) == {"schema_version": 1}
     with pytest.raises(PayloadTooLargeError):
-        load_machine_observability_payload(oversized_relation)
+        parse_machine_observability_payload_json(exact_payload + " ")
 
 
 def test_provider_publishes_payload_on_relation_created():
