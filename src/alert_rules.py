@@ -23,6 +23,7 @@ from typing import Any
 import yaml
 from charms.dwellir_observability.v0.machine_observability import (
     MAX_DECODED_ARTIFACT_BYTES,
+    MAX_SERIALIZED_PAYLOAD_BYTES,
     MAX_TOTAL_DECODED_ARTIFACT_BYTES,
     ObservabilityArtifact,
 )
@@ -64,6 +65,9 @@ MAX_RULE_ERROR_DETAILS = 16
 MAX_RULE_GROUPS_PER_ARTIFACT = 128
 MAX_RULES_PER_GROUP = 128
 MAX_RULES_PER_ARTIFACT = 1024
+# Keep transformed rule state within the relation library's publish ceiling.
+MAX_TRANSFORMED_ARTIFACT_BYTES = MAX_SERIALIZED_PAYLOAD_BYTES
+MAX_TOPOLOGY_COMPONENT_BYTES = 256
 _MAX_VALIDATION_CALLS = 32
 _VALIDATION_BUDGET_SECONDS = 15.0
 _VALIDATION_PROCESS_TIMEOUT_SECONDS = 3.0
@@ -174,18 +178,30 @@ def _topology_labels(payload: Any) -> dict[str, str]:
     topology = _value(payload, "source_topology", None)
     if topology is None:
         return {}
-    return {label: str(value) for label, field in _TOPOLOGY_FIELDS if (value := _value(topology, field, ""))}
+    labels: dict[str, str] = {}
+    for label, field in _TOPOLOGY_FIELDS:
+        value = _value(topology, field, "")
+        if not value:
+            continue
+        if not _valid_topology_component(value):
+            raise ValueError("topology")
+        labels[label] = value
+    return labels
+
+
+def _valid_topology_component(value: object) -> bool:
+    """Accept bounded printable topology strings before transformation."""
+    return (
+        isinstance(value, str)
+        and value == value.strip()
+        and 0 < len(value.encode("utf-8")) <= MAX_TOPOLOGY_COMPONENT_BYTES
+        and value.isprintable()
+    )
 
 
 def _valid_ownership_component(value: object) -> bool:
     """Accept bounded printable identity components that cannot confuse ownership paths."""
-    return (
-        isinstance(value, str)
-        and value == value.strip()
-        and 0 < len(value.encode("utf-8")) <= 256
-        and "/" not in value
-        and value.isprintable()
-    )
+    return _valid_topology_component(value) and isinstance(value, str) and "/" not in value and value.isprintable()
 
 
 def _matcher_value(value: str) -> str:
@@ -331,6 +347,7 @@ def _transform_groups(
             if key in {"juju_model_uuid", "juju_application", "juju_unit"}
         )
     )
+    _enforce_transform_budget(groups, artifact_id, identifier, matcher, topology_labels)
     transformed: list[tuple[str, str, dict[str, object]]] = []
     ownership_digest = hashlib.sha256(ownership.encode("utf-8")).hexdigest()[:12]
     for original_group in groups:
@@ -371,6 +388,43 @@ def _transform_groups(
     return result
 
 
+def _nested_string_bytes(value: object) -> int:
+    """Count existing string work without constructing serialized output."""
+    if isinstance(value, str):
+        return len(value.encode("utf-8"))
+    if isinstance(value, dict):
+        return sum(_nested_string_bytes(key) + _nested_string_bytes(item) for key, item in value.items())
+    if isinstance(value, list):
+        return sum(_nested_string_bytes(item) for item in value)
+    return 0
+
+
+def _enforce_transform_budget(
+    groups: list[dict[str, object]],
+    artifact_id: str,
+    identifier: str,
+    matcher: str,
+    topology_labels: dict[str, str],
+) -> None:
+    """Reject projected amplification before copying or replacing strings."""
+    projected_bytes = 0
+    placeholder = "%%juju_topology%%"
+    matcher_bytes = len(matcher.encode("utf-8"))
+    injected_label_bytes = sum(
+        len(key.encode("utf-8")) + len(value.encode("utf-8")) + 8 for key, value in topology_labels.items()
+    )
+    for original_group in groups:
+        projected_bytes += _nested_string_bytes(original_group)
+        projected_bytes += len(identifier.encode("utf-8")) + len(artifact_id.encode("utf-8")) + 64
+        rules = original_group.get("rules", [])
+        for rule in rules if isinstance(rules, list) else []:
+            if isinstance(rule, dict) and isinstance(expression := rule.get("expr"), str):
+                projected_bytes += expression.count(placeholder) * max(0, matcher_bytes - len(placeholder))
+            projected_bytes += injected_label_bytes
+        if projected_bytes > MAX_TRANSFORMED_ARTIFACT_BYTES:
+            raise ValueError("limit")
+
+
 def _identity(raw_artifact: Any) -> tuple[str, str]:
     """Extract a safe artifact identity without including artifact content."""
     raw_type = _value(raw_artifact, "artifact_type", "unknown")
@@ -400,6 +454,20 @@ def _ownership_topology(payload: Any) -> tuple[str, str] | None:
     if not _valid_ownership_component(model_uuid) or not _valid_ownership_component(application):
         return None
     return model_uuid, application
+
+
+def _validated_build_topology(
+    payload: Any,
+) -> tuple[str, str, dict[str, str]] | None:
+    """Return all bounded transformation topology or fail closed."""
+    ownership = _ownership_topology(payload)
+    if ownership is None:
+        return None
+    try:
+        labels = _topology_labels(payload)
+    except ValueError:
+        return None
+    return ownership[0], ownership[1], labels
 
 
 def _backend_accepts(
@@ -439,8 +507,8 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
     raw_artifacts = _value(payload, "artifacts", []) or []
     artifacts = heapq.nsmallest(MAX_RULE_ARTIFACTS, raw_artifacts, key=_identity)
     suppressed_errors = max(0, len(raw_artifacts) - len(artifacts))
-    ownership_topology = _ownership_topology(payload)
-    if ownership_topology is None:
+    build_topology = _validated_build_topology(payload)
+    if build_topology is None:
         return RuleBuildResult(
             prometheus={},
             loki={},
@@ -448,9 +516,7 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
                 f"{artifact_type}/{artifact_id}: topology" for artifact_type, artifact_id in map(_identity, artifacts)
             ),
         )
-    model_uuid, application = ownership_topology
-
-    topology_labels = _topology_labels(payload)
+    model_uuid, application, topology_labels = build_topology
     decoded_bytes = 0
     for raw_artifact in artifacts:
         artifact_type, artifact_id = _identity(raw_artifact)

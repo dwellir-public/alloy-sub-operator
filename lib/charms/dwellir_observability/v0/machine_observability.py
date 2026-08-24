@@ -344,7 +344,16 @@ def load_machine_observability_payload(relation: Any) -> MachineObservabilityPay
             return MachineObservabilityPayload()
         raw_payload = relation.data[app].get("payload", "{}")
 
-    return MachineObservabilityPayload.model_validate(parse_machine_observability_payload_json(raw_payload))
+    parsed = parse_machine_observability_payload_json(raw_payload)
+    # Artifacts are consumed through a separate, per-item fail-closed path.  Keep
+    # their validation from suppressing otherwise valid telemetry declarations.
+    if (
+        isinstance(parsed, dict)
+        and parsed.get("schema_version") == MACHINE_OBSERVABILITY_SCHEMA_VERSION_V3
+        and isinstance(parsed.get("artifacts", []), list)
+    ):
+        parsed = {**parsed, "artifacts": []}
+    return MachineObservabilityPayload.model_validate(parsed)
 
 
 class MachineObservabilityProvider(Object):

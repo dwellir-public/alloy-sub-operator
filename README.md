@@ -39,8 +39,9 @@ exactly once, and validates PromQL or LogQL with packaged `cos-tool`. This is an
 internal rule-validation CLI, not a service, plugin, or datasource.
 
 The complete payload may be exactly `60 * 1024` bytes but no larger, and is not
-chunked. At most 32 artifacts are admitted per relation. Expressions, names,
-and non-topology labels are not rewritten. A malformed, future-version, or
+chunked. At most 32 artifacts are admitted per relation. Placeholder-bearing
+expressions and group names are rewritten for topology injection and
+deterministic scoping; non-topology labels are preserved. A malformed, future-version, or
 structurally invalid outer payload retains the whole relation's leader-shared
 last-known-good (LKG) state. Within a valid v3 payload, invalid encoding,
 checksum, or expression retains only that artifact's LKG while unrelated

@@ -31,6 +31,7 @@ def _machine_observability_payload(
     systemd_units=None,
     journal_match_expressions=None,
     log_files=None,
+    artifacts=None,
 ):
     return json.dumps(
         {
@@ -41,6 +42,7 @@ def _machine_observability_payload(
             "journal_match_expressions": journal_match_expressions or [],
             "log_files": log_files or [],
             "metrics_endpoints": metrics_endpoints or [],
+            **({"artifacts": artifacts} if artifacts is not None else {}),
         }
     )
 
@@ -1258,6 +1260,53 @@ def test_enable_host_metrics_renders_the_builtin_unix_exporter():
     assert "  targets = discovery.relabel.node.output" in config
     assert '  job_name = "node-exporter"' in config
     assert "  forward_to = [prometheus.remote_write.metrics.receiver]" in config
+
+
+@pytest.mark.parametrize("malformed_artifact", [None, {"artifact_type": "unknown"}])
+def test_v3_malformed_artifact_does_not_erase_valid_telemetry(malformed_artifact):
+    payload = _machine_observability_payload(
+        schema_version=3,
+        source_topology={
+            "model": "prod",
+            "model_uuid": "uuid",
+            "application": "polkadot",
+            "unit": "polkadot/0",
+            "charm_name": "polkadot",
+        },
+        systemd_units=["snap.polkadot.polkadot.service"],
+        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics"}],
+        log_files=[{"include": ["/var/log/polkadot/*.log"]}],
+        artifacts=[malformed_artifact],
+    )
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": payload},
+            ),
+            testing.Relation("send-loki-logs", remote_app_name="loki", remote_app_data={"url": LOKI_URL}),
+            testing.Relation(
+                "send-remote-write",
+                remote_app_name="mimir",
+                remote_app_data={"remote_write": json.dumps({"url": REMOTE_WRITE_URL})},
+            ),
+        ]
+    )
+
+    state_out, config = _run_and_capture_config(state)
+
+    assert isinstance(state_out.unit_status, testing.ActiveStatus)
+    assert "snap.polkadot.polkadot.service" in config
+    assert "localhost:9615" in config
+    assert "/var/log/polkadot/*.log" in config
 
 
 def test_enable_host_metrics_labels_them_with_juju_topology():

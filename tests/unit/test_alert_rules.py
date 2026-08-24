@@ -158,6 +158,41 @@ def test_build_rule_state_replaces_every_placeholder_and_supports_optional_topol
     assert "juju_model" not in rule["labels"]
 
 
+def test_build_rule_state_rejects_oversized_optional_topology_before_decode(monkeypatch):
+    import alert_rules
+
+    decode_calls = 0
+
+    def decode(*args, **kwargs):
+        nonlocal decode_calls
+        decode_calls += 1
+        return b""
+
+    monkeypatch.setattr(alert_rules, "_decode_bounded", decode)
+    artifact = _artifact("prometheus_alert_rules", "rules", [_group("Alerts")])
+
+    result = build_rule_state(_payload(artifact, topology={**TOPOLOGY, "model": "x" * 257}))
+
+    assert decode_calls == 0
+    assert result.errors == ("prometheus_alert_rules/rules: topology",)
+
+
+def test_placeholder_amplification_is_rejected_before_backend_validation():
+    expression = "%%juju_topology%%" * 1000
+    artifact = _artifact("prometheus_alert_rules", "rules", [_group("Alerts", expression)])
+    validator_calls = 0
+
+    def validator(*args):
+        nonlocal validator_calls
+        validator_calls += 1
+        return True
+
+    result = _build_rule_state(_payload(artifact), validator=validator)
+
+    assert validator_calls == 0
+    assert result.errors == ("prometheus_alert_rules/rules: size",)
+
+
 @pytest.mark.parametrize("artifact_type", ["prometheus_alert_rules", "loki_alert_rules"])
 def test_build_rule_state_accepts_safe_yaml_rules(artifact_type):
     artifact = _raw_artifact(
