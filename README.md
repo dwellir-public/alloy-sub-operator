@@ -16,16 +16,37 @@ To properly integrate with the principal, it consumes `machine-observability` de
 - optional `charm_name`
 - optional `source_topology`
 
-`alloy-sub` is now compatible with both:
+`alloy-sub` is compatible with:
 
 - v1 `machine_observability` payloads, where topology is derived from the attached
   `juju-info` principal relation
 - v2 payloads, where the provider also publishes explicit `source_topology`
+- v3 payloads, which retain v2 sources and add Prometheus and Loki alert-rule
+  artifacts
 
 In subordinate mode, `alloy-sub` still treats `juju-info` as the source of
-truth for the attached principal unit. The v2 `source_topology` block is
-accepted for forward compatibility with providers that are also intended to
-work with `alloy-vm`.
+truth for telemetry topology and may accept a v1 payload without
+`source_topology`. Separately, a non-empty v3 rule set requires valid
+`source_topology.model_uuid` and `source_topology.application` for stable rule
+ownership. Rule labels are injected from the original payload topology, not
+from the telemetry fallback.
+
+### Alert-rule artifacts
+
+For v3, `alloy-sub` decodes `gzip+base64` artifacts, verifies the SHA-256 of
+decoded bytes, applies resource bounds, injects the principal's Juju topology
+exactly once, and validates PromQL or LogQL with packaged `cos-tool`. This is an
+internal rule-validation CLI, not a service, plugin, or datasource.
+
+The complete payload may be exactly `60 * 1024` bytes but no larger, and is not
+chunked. At most 32 artifacts are admitted per relation. Placeholder-bearing
+expressions and group names are rewritten for topology injection and
+deterministic scoping; non-topology labels are preserved. A malformed, future-version, or
+structurally invalid outer payload retains the whole relation's leader-shared
+last-known-good (LKG) state. Within a valid v3 payload, invalid encoding,
+checksum, or expression retains only that artifact's LKG while unrelated
+artifacts and telemetry continue. Valid omission or relation removal withdraws
+rules.
 
 ## Relation Flows
 
@@ -34,6 +55,29 @@ work with `alloy-vm`.
 - `send-loki-logs`: outbound Loki forwarding
 - `send-remote-write`: outbound metrics forwarding
 - `grafana-cloud-config`: outbound Grafana Cloud endpoints and credentials
+
+Prometheus rules travel on `send-remote-write`; Loki rules travel on
+`send-loki-logs`. Dashboards bypass Alloy and principals publish them directly
+to Grafana over `grafana_dashboard`.
+
+Direct backend relations:
+
+```bash
+juju relate principal:machine-observability alloy-sub:machine-observability
+juju relate alloy-sub:send-loki-logs loki-vm:loki_push_api
+juju relate alloy-sub:send-remote-write mimir-vm:receive-remote-write
+```
+
+Gateway relations keep ingestion and rule forwarding as separate planes:
+
+```bash
+juju relate alloy-sub:send-loki-logs loki-loadbalancer-vm:loki_push_api
+juju relate loki-loadbalancer-vm:loki-alert-rules loki-vm:loki_push_api
+juju relate loki-loadbalancer-vm:ingress loki-vm:ingress
+juju relate alloy-sub:send-remote-write mimir-gateway-vm:receive-remote-write
+juju relate mimir-gateway-vm:mimir-alert-rules mimir-vm:receive-remote-write
+juju relate mimir-gateway-vm:backend mimir-vm:backend
+```
 
 For the shared observability deployment, `send-remote-write` uses the plain
 `prometheus_remote_write` URL contract. `alloy-sub` does not publish tenant
@@ -151,16 +195,15 @@ Deploy the subordinate and principal, relate both relation endpoints, then inspe
 - declared metrics jobs render `prometheus.scrape` blocks
 - outbound Loki and remote-write endpoints are included when related
 
-## v2 Compatibility Check
+## Contract compatibility
 
-In the local model `alloy-sub-e2e-20260419`, `alloy-sub` has been validated
-against both:
+The supported compatibility matrix includes existing v1 providers such as
+`polkadot` and the v3 `dwellir-observability-reference` provider. Verify valid
+v3 forwarding and withdrawal after artifact removal in the target deployment.
+Upgrade safely in this order: reference library, both Alloy variants, both
+gateways, then Grafana VM.
 
-- `polkadot` publishing the existing v1 payload
-- `dwellir-observability-reference` publishing the v2 payload with
-  `source_topology`
-
-The expected result after refreshing the charm is:
+The expected compatibility result after refreshing the charm is:
 
 - the existing `alloy-sub` unit attached to `polkadot` remains `active`
 - the dedicated `alloy-sub-reference` unit attached to

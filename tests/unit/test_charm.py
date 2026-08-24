@@ -9,12 +9,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from ops import testing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
-from charm import AlloySubCharm, relation_urls
+from charm import RULE_CACHE_KEY, AlloySubCharm, relation_urls
 from outbound_endpoints import OutboundEndpoint
 
 LOKI_URL = "http://loki:3100/loki/api/v1/push"
@@ -30,6 +31,7 @@ def _machine_observability_payload(
     systemd_units=None,
     journal_match_expressions=None,
     log_files=None,
+    artifacts=None,
 ):
     return json.dumps(
         {
@@ -40,6 +42,7 @@ def _machine_observability_payload(
             "journal_match_expressions": journal_match_expressions or [],
             "log_files": log_files or [],
             "metrics_endpoints": metrics_endpoints or [],
+            **({"artifacts": artifacts} if artifacts is not None else {}),
         }
     )
 
@@ -76,6 +79,113 @@ def _ready_state(*, with_loki=False, with_remote_write=False):
             )
         )
     return testing.State(relations=relations)
+
+
+def _cached_rule_state(*backends):
+    entries = {}
+    for backend in backends:
+        artifact_type = "prometheus_alert_rules" if backend == "prometheus" else "loki_alert_rules"
+        entries[f"{artifact_type}/owned"] = {
+            "backend": backend,
+            "ownership": f"principal-uuid/polkadot/{artifact_type}/owned",
+            "groups": [{"name": f"{backend}-rules", "rules": [{"alert": "Down", "expr": "up == 0"}]}],
+        }
+    return testing.State(
+        leader=True,
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_app_data={"payload": "invalid-current"},
+                local_app_data={RULE_CACHE_KEY: AlloySubCharm._encode_rule_cache(entries)},
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("lifecycle", ["start", "update_status"])
+@pytest.mark.parametrize(
+    ("backends", "missing"),
+    [
+        (("prometheus",), "send-remote-write relation"),
+        (("loki",), "send-loki-logs relation"),
+        (("prometheus", "loki"), "send-remote-write relation and send-loki-logs relation"),
+    ],
+)
+def test_lifecycle_keeps_cached_rules_waiting_for_destinations(lifecycle, backends, missing):
+    ctx = testing.Context(AlloySubCharm)
+
+    def configure(charm, **_kwargs):
+        charm.unit.status = testing.ActiveStatus("configured")
+        return True
+
+    event = ctx.on.start() if lifecycle == "start" else ctx.on.update_status()
+    with (
+        patch.object(AlloySubCharm, "_configure", configure),
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(event, _cached_rule_state(*backends))
+
+    assert state_out.unit_status == testing.WaitingStatus(f"Alloy service running; config valid; waiting for {missing}")
+
+
+@pytest.mark.parametrize("lifecycle", ["start", "update_status"])
+def test_lifecycle_rule_reconcile_preserves_blocked_config_status(lifecycle):
+    ctx = testing.Context(AlloySubCharm)
+    event = ctx.on.start() if lifecycle == "start" else ctx.on.update_status()
+    with (
+        patch.object(
+            AlloySubCharm,
+            "_configure",
+            side_effect=RuntimeError("broken config"),
+        ),
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(event, _cached_rule_state("prometheus"))
+
+    assert state_out.unit_status == testing.BlockedStatus("Alloy service running; config invalid: broken config")
+
+
+@pytest.mark.parametrize("lifecycle", ["start", "update_status"])
+def test_lifecycle_rule_reconcile_preserves_existing_waiting_status(lifecycle):
+    ctx = testing.Context(AlloySubCharm)
+
+    def configure(charm, **_kwargs):
+        charm.unit.status = testing.WaitingStatus("upstream waiting")
+        return False
+
+    event = ctx.on.start() if lifecycle == "start" else ctx.on.update_status()
+    with (
+        patch.object(AlloySubCharm, "_configure", configure),
+        patch("charm.alloy.start"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(event, _cached_rule_state("prometheus"))
+
+    assert state_out.unit_status == testing.WaitingStatus("upstream waiting")
+
+
+def test_update_status_rule_reconcile_preserves_connectivity_blocked_status():
+    ctx = testing.Context(AlloySubCharm)
+
+    def configure(charm, **_kwargs):
+        charm.unit.status = testing.ActiveStatus("configured")
+        return True
+
+    with (
+        patch.object(AlloySubCharm, "_configure", configure),
+        patch.object(AlloySubCharm, "_grafana_cloud_status_error", return_value="connectivity failed"),
+        patch("charm.alloy.get_version", return_value=None),
+        patch("charm.alloy.is_active", return_value=True),
+    ):
+        state_out = ctx.run(ctx.on.update_status(), _cached_rule_state("prometheus"))
+
+    assert state_out.unit_status == testing.BlockedStatus("Alloy service running; connectivity failed")
 
 
 def test_start_becomes_active_when_required_relations_present():
@@ -639,7 +749,7 @@ def test_configure_restarts_alloy_when_custom_args_change():
     fake_charm = SimpleNamespace(
         unit=SimpleNamespace(status=None),
         _stored=SimpleNamespace(last_good_config="", last_custom_args=""),
-        _principal_context=lambda: SimpleNamespace(
+        _principal_context=lambda _payload=None: SimpleNamespace(
             juju_labels=lambda charm_name=None: {"juju_charm": charm_name or "polkadot"}
         ),
         _observability_payload=lambda: SimpleNamespace(
@@ -697,7 +807,7 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
             last_good_config="",
             last_custom_args="--server.http.listen-addr=0.0.0.0:6987",
         ),
-        _principal_context=lambda: SimpleNamespace(
+        _principal_context=lambda _payload=None: SimpleNamespace(
             juju_labels=lambda charm_name=None: {"juju_charm": charm_name or "polkadot"}
         ),
         _observability_payload=lambda: SimpleNamespace(
@@ -755,7 +865,7 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
             last_good_config="",
             last_custom_args="--server.http.listen-addr=0.0.0.0:6987",
         ),
-        _principal_context=lambda: SimpleNamespace(
+        _principal_context=lambda _payload=None: SimpleNamespace(
             juju_labels=lambda charm_name=None: {"juju_charm": charm_name or "polkadot"}
         ),
         _observability_payload=lambda: SimpleNamespace(
@@ -1150,6 +1260,53 @@ def test_enable_host_metrics_renders_the_builtin_unix_exporter():
     assert "  targets = discovery.relabel.node.output" in config
     assert '  job_name = "node-exporter"' in config
     assert "  forward_to = [prometheus.remote_write.metrics.receiver]" in config
+
+
+@pytest.mark.parametrize("malformed_artifact", [None, {"artifact_type": "unknown"}])
+def test_v3_malformed_artifact_does_not_erase_valid_telemetry(malformed_artifact):
+    payload = _machine_observability_payload(
+        schema_version=3,
+        source_topology={
+            "model": "prod",
+            "model_uuid": "uuid",
+            "application": "polkadot",
+            "unit": "polkadot/0",
+            "charm_name": "polkadot",
+        },
+        systemd_units=["snap.polkadot.polkadot.service"],
+        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics"}],
+        log_files=[{"include": ["/var/log/polkadot/*.log"]}],
+        artifacts=[malformed_artifact],
+    )
+    state = testing.State(
+        relations=[
+            testing.SubordinateRelation(
+                "juju-info",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_unit_data={"private-address": "10.0.0.5"},
+            ),
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={"payload": payload},
+            ),
+            testing.Relation("send-loki-logs", remote_app_name="loki", remote_app_data={"url": LOKI_URL}),
+            testing.Relation(
+                "send-remote-write",
+                remote_app_name="mimir",
+                remote_app_data={"remote_write": json.dumps({"url": REMOTE_WRITE_URL})},
+            ),
+        ]
+    )
+
+    state_out, config = _run_and_capture_config(state)
+
+    assert isinstance(state_out.unit_status, testing.ActiveStatus)
+    assert "snap.polkadot.polkadot.service" in config
+    assert "localhost:9615" in config
+    assert "/var/log/polkadot/*.log" in config
 
 
 def test_enable_host_metrics_labels_them_with_juju_topology():

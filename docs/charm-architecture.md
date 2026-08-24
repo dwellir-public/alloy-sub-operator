@@ -13,6 +13,7 @@ and consumes generic workload source declarations from the principal over
 - collect declared journald and file logs
 - forward logs to Loki
 - forward metrics via remote write
+- validate, topology-label, and forward v3 Prometheus and Loki alert rules
 
 ## Relation Flows
 
@@ -20,6 +21,24 @@ and consumes generic workload source declarations from the principal over
 - `machine-observability`: generic workload source declarations from the principal
 - `send-loki-logs`: outbound Loki forwarding
 - `send-remote-write`: outbound metrics forwarding
+
+The same sink relations carry standard alert-rule databags. Dashboards are
+published directly by principals to Grafana and are outside Alloy's role.
+
+## Artifact lifecycle
+
+The consumer supports v1, v2, and v3. For v3 it verifies compressed content and
+checksums, parses bounded documents, injects authoritative Juju topology, and
+uses packaged `cos-tool` for PromQL/LogQL validation. The CLI is a hook-time
+validator, not a workload service.
+
+Per-artifact LKG state is leader-owned relation application data. A malformed,
+future-version, or structurally invalid outer payload retains the whole
+relation LKG. Within a valid v3 payload, a malformed artifact retains only its
+own existing LKG. Valid omission removes an artifact and relation removal
+clears its ownership. Non-empty v3 rule sets require
+`source_topology.model_uuid` and `source_topology.application`; labels are
+injected from that original payload topology.
 
 ## Migration Notes
 
@@ -29,10 +48,13 @@ and consumes generic workload source declarations from the principal over
   `juju_unit` from the attached principal relation
 - `juju_charm` is optional metadata from the principal payload, not required for
   the core contract
-- `alloy-sub` accepts both schema versions and remains backward-compatible with
+- `alloy-sub` accepts all three schema versions and remains backward-compatible with
   existing v1 providers such as `polkadot`
-- in subordinate mode, `source_topology` is accepted but not required for label
-  derivation; `juju-info` remains the authoritative attachment context
+- for telemetry label derivation and attachment, `source_topology` is optional
+  and `juju-info` remains authoritative in subordinate mode
+- non-empty v3 alert artifacts require the original payload's
+  `source_topology.model_uuid` and `source_topology.application`; rule matchers
+  and injected topology labels derive from that payload topology
 - for `send-remote-write`, `alloy-sub` consumes the standard shared
   `prometheus_remote_write` URL contract only
 - partitioning in the shared observability deployment is done through metric

@@ -1,14 +1,14 @@
 # Build, Test, and Deploy
 
-This document captures the validated local workflow for the `alloy-sub` v2
-`machine_observability` consumer update using the model
-`alloy-sub-e2e-20260419`.
+This document covers local verification and an operator validation shape for
+the v1/v2/v3 `machine_observability` consumer.
 
 ## Goals
 
 - keep the existing `polkadot` attachment healthy with a v1 payload
-- consume the v2 payload from `dwellir-observability-reference`
+- consume the v3 payload from `dwellir-observability-reference`
 - render Alloy config successfully for both subordinate applications
+- validate and forward bounded v3 Prometheus and Loki alert-rule artifacts
 
 ## Local Verification
 
@@ -75,7 +75,7 @@ Expected rendered content:
 - a journald pipeline for the declared `polkadot` service
 - outbound Loki and remote-write sinks still present
 
-## Validate v2 Compatibility
+## Validate Reference v3 Compatibility
 
 Inspect the reference subordinate relation payload:
 
@@ -85,8 +85,10 @@ juju show-unit -m alloy-sub-e2e-20260419 alloy-sub-reference/0
 
 Expected:
 
-- relation `machine-observability` contains `schema_version: 2`
+- relation `machine-observability` contains `schema_version: 3`
 - relation `machine-observability` contains `source_topology`
+- non-empty rules have `source_topology.model_uuid` and
+  `source_topology.application`
 
 Inspect the rendered Alloy config for the reference attachment:
 
@@ -114,3 +116,40 @@ Expected metrics include:
 
 - `reference_demo_up`
 - `reference_demo_requests_total`
+
+## Validate v3 artifacts
+
+After upgrading the reference charm and Alloy, inspect relation data for
+`schema_version: 3` and both artifact types. Packaged `cos-tool` is an internal
+PromQL/LogQL validator and does not run as a service.
+
+```bash
+juju relate dwellir-observability-reference:machine-observability alloy-sub-reference:machine-observability
+```
+
+For direct backends:
+
+```bash
+juju relate alloy-sub-reference:send-loki-logs loki-vm:loki_push_api
+juju relate alloy-sub-reference:send-remote-write mimir-vm:receive-remote-write
+```
+
+For gateways:
+
+```bash
+juju relate alloy-sub-reference:send-loki-logs loki-loadbalancer-vm:loki_push_api
+juju relate loki-loadbalancer-vm:loki-alert-rules loki-vm:loki_push_api
+juju relate loki-loadbalancer-vm:ingress loki-vm:ingress
+juju relate alloy-sub-reference:send-remote-write mimir-gateway-vm:receive-remote-write
+juju relate mimir-gateway-vm:mimir-alert-rules mimir-vm:receive-remote-write
+juju relate mimir-gateway-vm:backend mimir-vm:backend
+```
+
+Test add/update, valid omission, relation removal, bad checksum, and invalid
+expression. Malformed, future-version, or structurally invalid outer data
+retains the whole relation LKG. Within a valid v3 payload, only a bad artifact
+retains its prior LKG; unrelated rules and telemetry continue. The payload may
+be exactly `60 * 1024` bytes, rejects only larger values, and is never chunked.
+
+Refresh the reference library first, then both Alloy variants, both gateways,
+and Grafana VM last, waiting for convergence after each step.

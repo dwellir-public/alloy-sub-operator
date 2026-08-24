@@ -281,7 +281,7 @@ class ConfigBuilder:
                         [
                             f'loki.source.journal "{name}" {{',
                             f'  matches = "{self._format_unit_match(unit)}"',
-                            '  relabel_rules = loki.relabel.journal.rules',
+                            "  relabel_rules = loki.relabel.journal.rules",
                             f'  labels = {{log_source = "journal", systemd_unit = "{unit}"}}',
                             "  forward_to = [loki.process.juju.receiver]",
                             "}",
@@ -298,7 +298,7 @@ class ConfigBuilder:
                         [
                             f'loki.source.journal "{name}" {{',
                             f'  matches = "{match}"',
-                            '  relabel_rules = loki.relabel.journal.rules',
+                            "  relabel_rules = loki.relabel.journal.rules",
                             '  labels = {log_source = "journal"}',
                             "  forward_to = [loki.process.juju.receiver]",
                             "}",
