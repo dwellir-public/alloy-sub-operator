@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from charms.dwellir_observability.v0 import alert_rule_transport as transport
 from charms.dwellir_observability.v0.machine_observability import (
     MAX_DECODED_ARTIFACT_BYTES,
     MAX_SERIALIZED_PAYLOAD_BYTES,
@@ -583,5 +584,6 @@ def publish_rule_groups(charm: Any, relation_name: str, groups: list[dict[str, o
         sort_keys=True,
     )
     for relation in charm.model.relations.get(relation_name, []):
-        relation.data[charm.app]["alert_rules"] = payload
+        remote = relation.data[relation.app] if relation.app else {}
+        relation.data[charm.app]["alert_rules"] = transport.encode(payload, remote)
         relation.data[charm.app]["metadata"] = metadata

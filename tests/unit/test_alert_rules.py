@@ -889,8 +889,8 @@ def test_publish_rule_groups_writes_full_compact_desired_state_to_every_relation
         name = "alloy-sub"
 
     app = App()
-    relation_one = SimpleNamespace(data={app: {"alert_rules": "stale"}})
-    relation_two = SimpleNamespace(data={app: {}})
+    relation_one = SimpleNamespace(app=None, data={app: {"alert_rules": "stale"}})
+    relation_two = SimpleNamespace(app=None, data={app: {}})
     charm = SimpleNamespace(
         app=app,
         unit=SimpleNamespace(name="alloy-sub/0"),
@@ -912,3 +912,28 @@ def test_publish_rule_groups_writes_full_compact_desired_state_to_every_relation
             "model_uuid": "alloy-uuid",
             "unit": "alloy-sub/0",
         }
+
+
+@pytest.mark.parametrize("advertised", [None, '["json"]', '["lzma", "json"]', "invalid"])
+def test_rule_publication_negotiates_and_handles_capability_withdrawal(advertised):
+    from charms.dwellir_observability.v0 import alert_rule_transport as transport
+
+    class App:
+        name = "alloy"
+
+    app, remote = App(), App()
+    remote_data = {} if advertised is None else {transport.ENCODINGS_KEY: advertised}
+    relation = SimpleNamespace(app=remote, data={app: {}, remote: remote_data})
+    charm = SimpleNamespace(
+        app=app,
+        unit=SimpleNamespace(name="alloy/0"),
+        model=SimpleNamespace(name="local", uuid="test", relations={"send-remote-write": [relation]}),
+    )
+    group = _group("Published")
+    publish_rule_groups(charm, "send-remote-write", [group])
+    raw = relation.data[app]["alert_rules"]
+    assert json.loads(transport.decode(raw)) == {"groups": [group]}
+    assert raw.startswith("/Td6WFoA") == (advertised == '["lzma", "json"]')
+    remote_data.clear()
+    publish_rule_groups(charm, "send-remote-write", [group])
+    assert json.loads(relation.data[app]["alert_rules"]) == {"groups": [group]}
