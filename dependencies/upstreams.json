@@ -1,0 +1,20 @@
+{
+  "cosl": {
+    "repository": "https://github.com/canonical/cos-lib",
+    "role": "runtime",
+    "distribution": "cosl",
+    "source_path": "src/cosl"
+  },
+  "machine_observability": {
+    "repository": "https://github.com/dwellir-public/dwellir-observability-reference",
+    "role": "runtime-vendored",
+    "source_path": "lib/charms/dwellir_observability/v0/machine_observability.py",
+    "distribution": null
+  },
+  "cloud_config_requirer": {
+    "repository": "https://github.com/canonical/grafana-cloud-integrator",
+    "role": "runtime-vendored",
+    "source_path": "lib/charms/grafana_cloud_integrator/v0/cloud_config_requirer.py",
+    "distribution": null
+  }
+}
