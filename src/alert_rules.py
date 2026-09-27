@@ -27,6 +27,7 @@ from charms.dwellir_observability.v0.machine_observability import (
     MAX_TOTAL_DECODED_ARTIFACT_BYTES,
     ObservabilityArtifact,
 )
+from cosl import LZMABase64
 from pydantic import ValidationError
 from yaml.tokens import AliasToken, AnchorToken, TagToken
 
@@ -573,6 +574,8 @@ def build_rule_state(payload: Any, *, validator: RuleValidator | None = None) ->
 def publish_rule_groups(charm: Any, relation_name: str, groups: list[dict[str, object]]) -> None:
     """Publish complete rule-group desired state and Alloy metadata to a relation."""
     payload = json.dumps({"groups": groups}, sort_keys=True, separators=(",", ":"))
+    if len(payload.encode("utf-8")) > 8 * 1024 * 1024:
+        raise ValueError("alert rules exceed decoded size limit")
     metadata = json.dumps(
         {
             "model": charm.model.name,
@@ -583,5 +586,18 @@ def publish_rule_groups(charm: Any, relation_name: str, groups: list[dict[str, o
         sort_keys=True,
     )
     for relation in charm.model.relations.get(relation_name, []):
-        relation.data[charm.app]["alert_rules"] = payload
+        remote = relation.data[relation.app] if relation.app else {}
+        try:
+            encodings = json.loads(remote.get("alert_rules_encodings", "[]"))
+        except (ValueError, TypeError):
+            encodings = []
+        compressed = isinstance(encodings, list) and "lzma" in encodings
+        encoded = LZMABase64.compress(payload) if compressed else payload
+        # A receiver advertising compression still accepts plain JSON. Prefer
+        # that fallback when XZ overhead would exceed the relation value budget.
+        if len(encoded.encode("utf-8")) >= 60 * 1024:
+            encoded = payload
+        if len(encoded.encode("utf-8")) >= 60 * 1024:
+            raise ValueError("alert rules exceed receiver capacity")
+        relation.data[charm.app]["alert_rules"] = encoded
         relation.data[charm.app]["metadata"] = metadata

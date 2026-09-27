@@ -889,8 +889,8 @@ def test_publish_rule_groups_writes_full_compact_desired_state_to_every_relation
         name = "alloy-sub"
 
     app = App()
-    relation_one = SimpleNamespace(data={app: {"alert_rules": "stale"}})
-    relation_two = SimpleNamespace(data={app: {}})
+    relation_one = SimpleNamespace(app=None, data={app: {"alert_rules": "stale"}})
+    relation_two = SimpleNamespace(app=None, data={app: {}})
     charm = SimpleNamespace(
         app=app,
         unit=SimpleNamespace(name="alloy-sub/0"),
@@ -912,3 +912,69 @@ def test_publish_rule_groups_writes_full_compact_desired_state_to_every_relation
             "model_uuid": "alloy-uuid",
             "unit": "alloy-sub/0",
         }
+
+
+@pytest.mark.parametrize("advertised", [None, '["json"]', '["lzma", "json"]', "invalid"])
+def test_rule_publication_negotiates_and_handles_capability_withdrawal(advertised):
+    from cosl import LZMABase64
+
+    class App:
+        name = "alloy"
+
+    app, remote = App(), App()
+    remote_data = {} if advertised is None else {"alert_rules_encodings": advertised}
+    relation = SimpleNamespace(app=remote, data={app: {}, remote: remote_data})
+    charm = SimpleNamespace(
+        app=app,
+        unit=SimpleNamespace(name="alloy/0"),
+        model=SimpleNamespace(name="local", uuid="test", relations={"send-remote-write": [relation]}),
+    )
+    group = _group("Published")
+    publish_rule_groups(charm, "send-remote-write", [group])
+    raw = relation.data[app]["alert_rules"]
+    assert json.loads(LZMABase64.decompress(raw) if raw.startswith("/Td6WFoA") else raw) == {"groups": [group]}
+    assert raw.startswith("/Td6WFoA") == (advertised == '["lzma", "json"]')
+    remote_data.clear()
+    publish_rule_groups(charm, "send-remote-write", [group])
+    assert json.loads(relation.data[app]["alert_rules"]) == {"groups": [group]}
+
+
+@pytest.mark.parametrize("advertised", ['["lzma", "json"]', '["json"]', "null", "{}", '"lzma"'])
+def test_publication_uses_public_codec_and_rejects_oversize_without_truncation(monkeypatch, advertised):
+    from cosl import LZMABase64
+
+    class App:
+        name = "alloy"
+
+    app, remote = App(), App()
+    data = {app: {"alert_rules": "prior"}, remote: {"alert_rules_encodings": advertised}}
+    relation = SimpleNamespace(app=remote, data=data)
+    charm = SimpleNamespace(
+        app=app,
+        unit=SimpleNamespace(name="alloy/0"),
+        model=SimpleNamespace(name="local", uuid="test", relations={"send-remote-write": [relation]}),
+    )
+    calls = []
+    original = LZMABase64.compress
+
+    def compress(raw):
+        calls.append(raw)
+        return original(raw)
+
+    monkeypatch.setattr(LZMABase64, "compress", compress)
+    group = _group("large")
+    group["rules"][0]["expr"] = "a" * (70 * 1024)
+    if advertised == '["lzma", "json"]':
+        publish_rule_groups(charm, "send-remote-write", [group])
+        assert calls
+        assert json.loads(LZMABase64.decompress(data[app]["alert_rules"])) == {"groups": [group]}
+    else:
+        with pytest.raises(ValueError, match="capacity"):
+            publish_rule_groups(charm, "send-remote-write", [group])
+        assert data[app]["alert_rules"] == "prior"
+        assert not calls
+    before = dict(data[app])
+    group["rules"][0]["expr"] = "a" * (8 * 1024 * 1024)
+    with pytest.raises(ValueError, match="decoded size"):
+        publish_rule_groups(charm, "send-remote-write", [group])
+    assert data[app] == before

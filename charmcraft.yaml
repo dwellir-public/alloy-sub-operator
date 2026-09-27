@@ -124,3 +124,9 @@ parts:
     source: .
     build-snaps:
       - astral-uv
+
+  templates:
+    plugin: dump
+    source: .
+    prime:
+      - "./templates/*"

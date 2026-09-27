@@ -210,3 +210,19 @@ The expected compatibility result after refreshing the charm is:
   `dwellir-observability-reference` also becomes `active`
 - both units render principal-specific metrics and log pipelines from their
   respective payloads
+
+
+## Alert rule transport
+
+Alert rules use the receiver's `alert_rules_encodings` advertisement to negotiate
+Canonical-compatible LZMA/base64 encoding in the existing `alert_rules` field.
+Legacy receivers continue to receive JSON. The publisher uses Canonical's public
+`cosl.LZMABase64` codec when the receiver advertises LZMA support. Publishing keeps
+an 8 MiB decoded budget and a 60 KiB relation-value ceiling; oversized output is
+reported rather than truncated. Artifact validation and last-known-good handling
+remain local to this charm.
+
+Upgrade Loki/Mimir receivers and gateways before collectors when aggregates exceed
+the JSON size limit. Encoded values remain below 60 KiB, with the collector's
+existing stricter publication guard retained. Compression does not change source
+topology, machine-observability schema/artifact encoding, or artifact-count limits.
