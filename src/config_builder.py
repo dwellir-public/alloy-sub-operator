@@ -186,6 +186,11 @@ class ConfigBuilder:
         if host_metrics.disable_collectors:
             collectors = ", ".join(json.dumps(collector) for collector in host_metrics.disable_collectors)
             lines.append(f"  disable_collectors = [{collectors}]")
+        lines.append("  // Opinionated TCP field selection to help detect TCP-related issues.")
+        lines.append(
+            '  netstat { fields = "TcpExt_(TCPDSACKRecv|TCPLossProbes|TCPToZeroWindowAdv|'
+            'TCPFromZeroWindowAdv|TCPWantZeroWindowAdv|TCPRcvQDrop|TCPBacklogDrop)" }'
+        )
         lines.extend(
             [
                 "}",
