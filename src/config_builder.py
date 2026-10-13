@@ -290,9 +290,9 @@ class ConfigBuilder:
                     "\n".join(
                         [
                             f'loki.source.journal "{name}" {{',
-                            f'  matches = "{self._format_unit_match(unit)}"',
+                            f"  matches = {json.dumps(self._format_unit_match(unit))}",
                             "  relabel_rules = loki.relabel.journal.rules",
-                            f'  labels = {{log_source = "journal", systemd_unit = "{unit}"}}',
+                            f'  labels = {{log_source = "journal", systemd_unit = {json.dumps(unit)}}}',
                             "  forward_to = [loki.process.juju.receiver]",
                             "}",
                         ]

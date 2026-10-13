@@ -812,12 +812,8 @@ class AlloySubCharm(ops.CharmBase):
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
             return False
-        if (
-            not self._has_machine_observability_relation()
-            and not self._host_metrics_enabled()
-            and not self._configured_log_files()
-        ):
-            # Local host metrics or configured file logs can form a pipeline
+        if not self._has_machine_observability_relation() and not self._has_local_sources():
+            # Local host metrics or configured logs can form a pipeline
             # without a workload observability declaration.
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(
@@ -850,7 +846,7 @@ class AlloySubCharm(ops.CharmBase):
             loki_endpoints=loki_endpoints,
             remote_write_endpoints=remote_write_endpoints,
             metrics_scrape_jobs=self._active_metrics_scrape_jobs(payload, principal_context),
-            systemd_units=payload.systemd_units,
+            systemd_units=self._systemd_units(payload),
             journal_match_expressions=payload.journal_match_expressions,
             file_log_sources=self._file_log_sources(payload),
             topology_labels=topology_labels,
@@ -902,13 +898,16 @@ class AlloySubCharm(ops.CharmBase):
     def _active_message(self, default: str) -> str:
         """Return the active-status message for the currently rendered config."""
         if not self._has_machine_observability_relation():
-            if self._configured_log_files():
-                return (
-                    "host metrics and configured file logs"
-                    if self._host_metrics_enabled()
-                    else "configured file logs only"
+            sources = [
+                name
+                for name, enabled in (
+                    ("host metrics", self._host_metrics_enabled()),
+                    ("configured file logs", self._configured_log_files()),
+                    ("configured journal logs", self._configured_systemd_service()),
                 )
-            return "host metrics only"
+                if enabled
+            ]
+            return " and ".join(sources) + (" only" if len(sources) == 1 else "")
         return default
 
     @staticmethod
@@ -937,11 +936,7 @@ class AlloySubCharm(ops.CharmBase):
         missing_relations: list[str] = []
         if principal_context is None:
             missing_relations.append("juju-info relation")
-        if (
-            not self._has_machine_observability_relation()
-            and not self._host_metrics_enabled()
-            and not self._configured_log_files()
-        ):
+        if not self._has_machine_observability_relation() and not self._has_local_sources():
             missing_relations.append("machine-observability relation")
         return missing_relations
 
@@ -1127,6 +1122,22 @@ class AlloySubCharm(ops.CharmBase):
         if any(not path.startswith("/") for path in paths):
             raise ValueError("log-files entries must be absolute paths or globs")
         return paths
+
+    def _configured_systemd_service(self) -> str:
+        """Return the optional config-selected systemd journal unit."""
+        return str(self.config.get("systemd-service", "")).strip()
+
+    def _has_local_sources(self) -> bool:
+        """Return whether config enables telemetry without a declaration relation."""
+        return bool(self._host_metrics_enabled() or self._configured_log_files() or self._configured_systemd_service())
+
+    def _systemd_units(self, payload: MachineObservabilityPayload) -> list[str]:
+        """Combine relation and config-selected journal units without duplicates."""
+        units = list(payload.systemd_units)
+        configured_service = self._configured_systemd_service()
+        if configured_service:
+            units.append(configured_service)
+        return list(dict.fromkeys(units))
 
     def _file_log_sources(self, payload: MachineObservabilityPayload) -> list[BuilderFileLogSource]:
         """Combine relation file sources with additional config-selected paths."""
