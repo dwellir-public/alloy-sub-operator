@@ -44,6 +44,17 @@ config:
         relations take precedence for rendered log forwarding.
       type: string
       default: ""
+    log-files:
+      description: |
+        Absolute file paths or globs to collect alongside relation-provided logs.
+        Separate multiple paths with semicolons, for example
+        /tmp/example.log;/var/log/my-app/*.log. Whitespace and empty entries are
+        ignored. An empty value adds no file sources. Files must be readable by
+        Alloy on the principal machine. New files are read from the beginning,
+        then followed. The path_exclude option also applies to these sources.
+        A Loki destination is required to forward the logs.
+      type: string
+      default: ""
     path_exclude:
       description: |
         Semi-colon separated file log exclude patterns appended to workload excludes.

@@ -378,8 +378,12 @@ class ConfigBuilder:
                 rendered.extend(
                     [
                         "    {",
-                        f'      __path__ = "{include}",',
-                        *([f'      __path_exclude__ = "{self._combine_excludes(excludes)}",'] if excludes else []),
+                        f"      __path__ = {json.dumps(include)},",
+                        *(
+                            [f"      __path_exclude__ = {json.dumps(self._combine_excludes(excludes))},"]
+                            if excludes
+                            else []
+                        ),
                         *self._render_label_lines(source.attributes, indent="      "),
                         "    },",
                     ]

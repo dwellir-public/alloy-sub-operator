@@ -39,6 +39,14 @@ def test_readme_documents_host_metrics():
     assert "enable-host-metrics=true" in readme
 
 
+def test_charmcraft_declares_empty_log_files_option():
+    import yaml
+
+    options = yaml.safe_load(Path("charmcraft.yaml").read_text())["config"]["options"]
+    assert options["log-files"]["type"] == "string"
+    assert options["log-files"]["default"] == ""
+
+
 def test_pyproject_has_uv_style_dependency_groups():
     pyproject = Path("pyproject.toml").read_text()
 

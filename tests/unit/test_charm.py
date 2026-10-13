@@ -5,6 +5,7 @@
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -771,6 +772,8 @@ def test_configure_restarts_alloy_when_custom_args_change():
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
         _host_metrics_enabled=lambda: False,
+        _configured_log_files=lambda: [],
+        _file_log_sources=lambda payload: [],
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -829,6 +832,8 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
         _host_metrics_enabled=lambda: False,
+        _configured_log_files=lambda: [],
+        _file_log_sources=lambda payload: [],
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -887,6 +892,8 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         _max_elapsed_time_min=lambda: 5,
         _tls_insecure_skip_verify=lambda: False,
         _host_metrics_enabled=lambda: False,
+        _configured_log_files=lambda: [],
+        _file_log_sources=lambda payload: [],
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -1234,7 +1241,7 @@ def _host_metrics_state(*, enabled, with_machine_observability=True):
     return testing.State(relations=relations, config={"enable-host-metrics": enabled})
 
 
-def _run_and_capture_config(state):
+def _run_and_capture_config(state, *, event_name="start"):
     """Run a start hook against the real ConfigBuilder and return the written config."""
     ctx = testing.Context(AlloySubCharm)
     with (
@@ -1249,8 +1256,95 @@ def _run_and_capture_config(state):
         patch("charm.alloy.restart"),
         patch("charm.alloy.verify_config"),
     ):
-        state_out = ctx.run(ctx.on.start(), state)
+        state_out = ctx.run(getattr(ctx.on, event_name)(), state)
     return state_out, write_config.call_args[0][0]
+
+
+def _configured_log_files_state(value, *, with_machine_observability=True, payload=None):
+    state = _host_metrics_state(enabled=False, with_machine_observability=with_machine_observability)
+    state.config["log-files"] = value
+    state = replace(
+        state,
+        relations=[
+            *state.relations,
+            testing.Relation("send-loki-logs", remote_app_name="loki", remote_app_data={"url": LOKI_URL}),
+        ],
+    )
+    if payload is not None:
+        relation = next(relation for relation in state.relations if relation.endpoint == "machine-observability")
+        relation.remote_app_data["payload"] = payload
+    return state
+
+
+@pytest.mark.parametrize("value", ["", " ; ;  "])
+def test_empty_log_files_adds_no_file_sources(value):
+    _, config = _run_and_capture_config(_configured_log_files_state(value), event_name="config_changed")
+    assert "loki.source.file" not in config
+    assert "local.file_match" not in config
+
+
+def test_log_files_parses_globs_and_applies_exclusions_without_observability_relation():
+    state = _configured_log_files_state(
+        " /tmp/example.log ; /var/log/my-app/*.log ;; /tmp/example.log ",
+        with_machine_observability=False,
+    )
+    state.config["path_exclude"] = "/var/log/my-app/ignored.log;/tmp/excluded.log"
+    state_out, config = _run_and_capture_config(state, event_name="config_changed")
+    assert config.count('__path__ = "/tmp/example.log"') == 1
+    assert '__path__ = "/var/log/my-app/*.log"' in config
+    assert '__path_exclude__ = "/var/log/my-app/ignored.log,/tmp/excluded.log"' in config
+    assert 'loki.source.file "filelogs"' in config
+    assert f'url = "{LOKI_URL}"' in config
+    assert "forward_to = [loki.write.main.receiver]" in config
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; configured file logs only"
+    )
+
+
+@pytest.mark.parametrize("value", ["/tmp/custom.log;/var/log/principal.log", ""])
+def test_configured_files_preserve_relation_logs_and_do_not_duplicate_exact_paths(value):
+    payload = _machine_observability_payload(
+        systemd_units=["principal.service"],
+        log_files=[{"include": ["/var/log/principal.log"], "attributes": {"source": "principal"}}],
+    )
+    _, config = _run_and_capture_config(
+        _configured_log_files_state(value, payload=payload), event_name="config_changed"
+    )
+    assert config.count('__path__ = "/var/log/principal.log"') == 1
+    assert 'source = "principal"' in config
+    assert "_SYSTEMD_UNIT=principal.service" in config
+    assert ('__path__ = "/tmp/custom.log"' in config) == bool(value)
+
+
+def test_log_files_escapes_quotes_in_file_paths():
+    _, config = _run_and_capture_config(_configured_log_files_state('/tmp/my"file.log'), event_name="config_changed")
+    assert '__path__ = "/tmp/my\\"file.log"' in config
+
+
+def test_clearing_log_files_removes_config_sources_and_preserves_relation_sources():
+    payload = _machine_observability_payload(
+        systemd_units=["principal.service"], log_files=[{"include": ["/var/log/principal.log"]}]
+    )
+    state_out, config = _run_and_capture_config(
+        _configured_log_files_state("/tmp/custom.log", payload=payload), event_name="config_changed"
+    )
+    assert "/tmp/custom.log" in config
+    state_out.config["log-files"] = ""
+    _, cleared_config = _run_and_capture_config(state_out, event_name="config_changed")
+    assert "/tmp/custom.log" not in cleared_config
+    assert "/var/log/principal.log" in cleared_config
+    assert "_SYSTEMD_UNIT=principal.service" in cleared_config
+
+
+def test_log_files_rejects_relative_paths_without_writing_config():
+    ctx = testing.Context(AlloySubCharm)
+    state = _configured_log_files_state("relative/example.log", with_machine_observability=False)
+    with patch("charm.alloy.is_active", return_value=True), patch("charm.alloy.write_config_text") as write:
+        state_out = ctx.run(ctx.on.config_changed(), state)
+    assert state_out.unit_status == testing.BlockedStatus(
+        "Alloy service running; config invalid: log-files entries must be absolute paths or globs"
+    )
+    write.assert_not_called()
 
 
 def test_enable_host_metrics_renders_the_builtin_unix_exporter():

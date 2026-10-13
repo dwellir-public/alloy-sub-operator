@@ -812,9 +812,13 @@ class AlloySubCharm(ops.CharmBase):
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
             return False
-        if not self._has_machine_observability_relation() and not self._host_metrics_enabled():
-            # Host metrics alone are enough to render a useful config, so the
-            # relation is only required when nothing else would be collected.
+        if (
+            not self._has_machine_observability_relation()
+            and not self._host_metrics_enabled()
+            and not self._configured_log_files()
+        ):
+            # Local host metrics or configured file logs can form a pipeline
+            # without a workload observability declaration.
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(
                 self._status_message("config waiting for machine-observability relation")
@@ -848,14 +852,7 @@ class AlloySubCharm(ops.CharmBase):
             metrics_scrape_jobs=self._active_metrics_scrape_jobs(payload, principal_context),
             systemd_units=payload.systemd_units,
             journal_match_expressions=payload.journal_match_expressions,
-            file_log_sources=[
-                BuilderFileLogSource(
-                    include=source.include,
-                    exclude=merge_file_excludes(source.exclude, self._path_exclude_patterns()),
-                    attributes=source.attributes,
-                )
-                for source in payload.log_files
-            ],
+            file_log_sources=self._file_log_sources(payload),
             topology_labels=topology_labels,
             global_scrape_interval=self._global_scrape_interval(),
             global_scrape_timeout=self._global_scrape_timeout(),
@@ -905,8 +902,12 @@ class AlloySubCharm(ops.CharmBase):
     def _active_message(self, default: str) -> str:
         """Return the active-status message for the currently rendered config."""
         if not self._has_machine_observability_relation():
-            # Only host metrics are being collected; saying more would advertise
-            # workload telemetry that nothing is producing.
+            if self._configured_log_files():
+                return (
+                    "host metrics and configured file logs"
+                    if self._host_metrics_enabled()
+                    else "configured file logs only"
+                )
             return "host metrics only"
         return default
 
@@ -936,9 +937,11 @@ class AlloySubCharm(ops.CharmBase):
         missing_relations: list[str] = []
         if principal_context is None:
             missing_relations.append("juju-info relation")
-        if not self._has_machine_observability_relation() and not self._host_metrics_enabled():
-            # Host metrics are a complete pipeline on their own, so the relation
-            # is only outstanding when nothing else would be collected.
+        if (
+            not self._has_machine_observability_relation()
+            and not self._host_metrics_enabled()
+            and not self._configured_log_files()
+        ):
             missing_relations.append("machine-observability relation")
         return missing_relations
 
@@ -1115,6 +1118,36 @@ class AlloySubCharm(ops.CharmBase):
     def _path_exclude_patterns(self) -> str:
         """Return raw path exclude config for file-log translation."""
         return str(self.config.get("path_exclude", "")).strip()
+
+    def _configured_log_files(self) -> list[str]:
+        """Return distinct, nonempty absolute file paths or globs from config."""
+        paths = list(
+            dict.fromkeys(path.strip() for path in str(self.config.get("log-files", "")).split(";") if path.strip())
+        )
+        if any(not path.startswith("/") for path in paths):
+            raise ValueError("log-files entries must be absolute paths or globs")
+        return paths
+
+    def _file_log_sources(self, payload: MachineObservabilityPayload) -> list[BuilderFileLogSource]:
+        """Combine relation file sources with additional config-selected paths."""
+        sources = [
+            BuilderFileLogSource(
+                include=source.include,
+                exclude=merge_file_excludes(source.exclude, self._path_exclude_patterns()),
+                attributes=source.attributes,
+            )
+            for source in payload.log_files
+        ]
+        declared_paths = {path for source in payload.log_files for path in source.include}
+        extra_paths = [path for path in self._configured_log_files() if path not in declared_paths]
+        if extra_paths:
+            sources.append(
+                BuilderFileLogSource(
+                    include=extra_paths,
+                    exclude=merge_file_excludes([], self._path_exclude_patterns()),
+                )
+            )
+        return sources
 
     def _global_scrape_interval(self) -> str:
         """Return the default scrape interval."""
