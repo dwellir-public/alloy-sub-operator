@@ -166,6 +166,46 @@ Expected result:
 - the Grafana Cloud Loki endpoint is rendered with `basic_auth`
 - if plain upstream relations also exist, Alloy renders both sets of endpoints
 
+## Configured file logs
+
+Use `log-files` to collect additional files on the principal machine:
+
+```bash
+juju config alloy-sub log-files='/tmp/example.log;/var/log/my-app/*.log'
+```
+
+The option is a string of absolute paths or globs separated by semicolons.
+Whitespace, empty entries and repeated paths are ignored. Its default is empty,
+so it adds no file sources until configured. This follows the semicolon syntax
+of the OpenTelemetry collector charm's `path_exclude` option; that charm has no
+equivalent configurable include list.
+
+Configured files are collected alongside file and systemd journal sources
+declared through `machine-observability`. Exact paths already declared by the
+principal keep their relation-provided attributes. Avoid overlapping globs if
+you want to prevent the same file from appearing in multiple targets.
+
+The existing `path_exclude` option applies to configured and relation-provided
+file sources:
+
+```bash
+juju config alloy-sub path_exclude='/var/log/my-app/debug.log;/tmp/ignored.log'
+```
+
+Alloy must be able to read the files. A newly discovered file with no saved
+position is read from the beginning, then followed as lines are appended.
+Existing positions resume after a restart. This matches the OpenTelemetry
+collector's initial-file behavior. `log-files` can collect files with only a
+`juju-info` attachment, without a `machine-observability` relation. Configure
+`send-loki-logs` or `grafana-cloud-config` to forward the collected logs.
+
+Clear the option to stop collecting config-selected files. Relation-provided
+file and journal sources remain:
+
+```bash
+juju config alloy-sub log-files=''
+```
+
 ## Host metrics
 
 Set `enable-host-metrics=true` to collect host-level metrics, labelled with the
