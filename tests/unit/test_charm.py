@@ -774,6 +774,7 @@ def test_configure_restarts_alloy_when_custom_args_change():
         _host_metrics_enabled=lambda: False,
         _configured_log_files=lambda: [],
         _file_log_sources=lambda payload: [],
+        _systemd_units=lambda payload: payload.systemd_units,
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -834,6 +835,7 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         _host_metrics_enabled=lambda: False,
         _configured_log_files=lambda: [],
         _file_log_sources=lambda payload: [],
+        _systemd_units=lambda payload: payload.systemd_units,
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -894,6 +896,7 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         _host_metrics_enabled=lambda: False,
         _configured_log_files=lambda: [],
         _file_log_sources=lambda payload: [],
+        _systemd_units=lambda payload: payload.systemd_units,
         _active_message=lambda default: default,
         _validate_config=lambda config_text: None,
         _desired_custom_args=lambda: "--server.http.listen-addr=0.0.0.0:6987",
@@ -1345,6 +1348,73 @@ def test_log_files_rejects_relative_paths_without_writing_config():
         "Alloy service running; config invalid: log-files entries must be absolute paths or globs"
     )
     write.assert_not_called()
+
+
+def test_configured_systemd_service_collects_journal_alongside_host_metrics_without_relation():
+    state = _configured_log_files_state("", with_machine_observability=False)
+    state.config.update({"enable-host-metrics": True, "systemd-service": " iris.service "})
+    state_out, config = _run_and_capture_config(state, event_name="config_changed")
+    assert 'prometheus.exporter.unix "node"' in config
+    assert 'matches = "_SYSTEMD_UNIT=iris.service"' in config
+    assert 'systemd_unit = "iris.service"' in config
+    assert 'loki.write "main"' in config
+    assert f'url = "{LOKI_URL}"' in config
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; host metrics and configured journal logs"
+    )
+
+
+def test_configured_systemd_service_collects_without_host_metrics_or_observability_relation():
+    state = _configured_log_files_state("", with_machine_observability=False)
+    state.config["systemd-service"] = "iris.service"
+    state_out, config = _run_and_capture_config(state, event_name="config_changed")
+    assert 'matches = "_SYSTEMD_UNIT=iris.service"' in config
+    assert "prometheus.exporter.unix" not in config
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; configured journal logs only"
+    )
+
+
+@pytest.mark.parametrize("configured_service", ["iris.service", "principal.service"])
+def test_configured_systemd_service_is_additive_and_deduplicates_relation_services(configured_service):
+    state = _configured_log_files_state(
+        "/tmp/custom.log",
+        payload=_machine_observability_payload(
+            systemd_units=["principal.service"],
+            log_files=[{"include": ["/var/log/principal.log"]}],
+        ),
+    )
+    state.config["systemd-service"] = configured_service
+    _, config = _run_and_capture_config(state, event_name="config_changed")
+    assert config.count('matches = "_SYSTEMD_UNIT=principal.service"') == 1
+    assert config.count(f'matches = "_SYSTEMD_UNIT={configured_service}"') == 1
+    assert "/var/log/principal.log" in config
+    assert "/tmp/custom.log" in config
+
+
+def test_clearing_systemd_service_preserves_relation_journal_and_host_metrics():
+    state = _configured_log_files_state("", payload=_machine_observability_payload(systemd_units=["principal.service"]))
+    state.config.update({"enable-host-metrics": True, "systemd-service": "iris.service"})
+    state_out, config = _run_and_capture_config(state, event_name="config_changed")
+    assert "_SYSTEMD_UNIT=iris.service" in config
+    state_out.config["systemd-service"] = ""
+    _, cleared_config = _run_and_capture_config(state_out, event_name="config_changed")
+    assert "_SYSTEMD_UNIT=iris.service" not in cleared_config
+    assert "_SYSTEMD_UNIT=principal.service" in cleared_config
+    assert 'prometheus.exporter.unix "node"' in cleared_config
+
+
+def test_clearing_configured_systemd_service_without_relation_keeps_metrics_only():
+    state = _configured_log_files_state("", with_machine_observability=False)
+    state.config.update({"enable-host-metrics": True, "systemd-service": "iris.service"})
+    state_out, config = _run_and_capture_config(state, event_name="config_changed")
+    assert "loki.source.journal" in config
+    state_out.config["systemd-service"] = ""
+    cleared_state, cleared_config = _run_and_capture_config(state_out, event_name="config_changed")
+    assert "loki.source.journal" not in cleared_config
+    assert "loki.write" not in cleared_config
+    assert 'prometheus.exporter.unix "node"' in cleared_config
+    assert cleared_state.unit_status == testing.ActiveStatus("Alloy service running; config valid; host metrics only")
 
 
 def test_enable_host_metrics_renders_the_builtin_unix_exporter():

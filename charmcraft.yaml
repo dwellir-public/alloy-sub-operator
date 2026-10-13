@@ -24,9 +24,13 @@ config:
       type: string
     systemd-service:
       description: |
-        Systemd service name of the principal charm to monitor and forward logs for.
-        When the machine-observability relation is present, relation-provided
-        systemd_units take precedence for _SYSTEMD_UNIT journal log collection.
+        Exact systemd unit name to collect from the principal machine's journal,
+        for example iris.service. An empty value adds no journal source.
+        This unit is collected alongside systemd_units declared through the
+        machine-observability relation; duplicate unit names are collected once.
+        Collection works with only a juju-info attachment and can coexist with
+        host metrics and file logs. Configure send-loki-logs or
+        grafana-cloud-config to forward collected logs to Loki.
       default: ""
       type: string
     custom-args:

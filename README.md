@@ -166,6 +166,27 @@ Expected result:
 - the Grafana Cloud Loki endpoint is rendered with `basic_auth`
 - if plain upstream relations also exist, Alloy renders both sets of endpoints
 
+## Configured systemd journal logs
+
+Set `systemd-service` to collect a systemd unit's journal on the principal machine:
+
+```bash
+juju config alloy-sub systemd-service=iris.service
+```
+
+The default is empty. The configured unit is collected alongside `systemd_units`
+declared through `machine-observability`; exact duplicate names are collected
+once. Collection works with a `juju-info` attachment even without a
+`machine-observability` declaration. It can run alongside host metrics and file
+logs. Configure `send-loki-logs` or `grafana-cloud-config` to forward logs to Loki.
+
+Clear the option to remove the config-selected journal source. Relation-declared
+journal sources, file logs and host metrics remain:
+
+```bash
+juju config alloy-sub systemd-service=''
+```
+
 ## Configured file logs
 
 Use `log-files` to collect additional files on the principal machine:
