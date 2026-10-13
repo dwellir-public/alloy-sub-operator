@@ -186,10 +186,15 @@ class ConfigBuilder:
         if host_metrics.disable_collectors:
             collectors = ", ".join(json.dumps(collector) for collector in host_metrics.disable_collectors)
             lines.append(f"  disable_collectors = [{collectors}]")
-        lines.append("  // Opinionated TCP field selection to help detect TCP-related issues.")
+        lines.append("  // Preserve Alloy's default netstat allowlist and add opinionated TCP diagnostics.")
+        # Default allowlist from Alloy v1.20.1, extended only in the TcpExt group:
+        # https://github.com/grafana/alloy/blob/v1.20.1/internal/static/integrations/node_exporter/config.go
         lines.append(
-            '  netstat { fields = "TcpExt_(TCPDSACKRecv|TCPLossProbes|TCPToZeroWindowAdv|'
-            'TCPFromZeroWindowAdv|TCPWantZeroWindowAdv|TCPRcvQDrop|TCPBacklogDrop)" }'
+            '  netstat { fields = "^(.*_(InErrors|InErrs)|Ip_Forwarding|Ip(6|Ext)_(InOctets|OutOctets)|'
+            "Icmp6?_(InMsgs|OutMsgs)|TcpExt_(Listen.*|Syncookies.*|TCPSynRetrans|TCPTimeouts|"
+            "TCPDSACKRecv|TCPLossProbes|TCPToZeroWindowAdv|TCPFromZeroWindowAdv|TCPWantZeroWindowAdv|"
+            "TCPRcvQDrop|TCPBacklogDrop)|Tcp_(ActiveOpens|InSegs|OutSegs|OutRsts|PassiveOpens|RetransSegs|CurrEstab)|"
+            'Udp6?_(InDatagrams|OutDatagrams|NoPorts|RcvbufErrors|SndbufErrors))$" }'
         )
         lines.extend(
             [

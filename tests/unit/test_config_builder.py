@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -277,6 +278,61 @@ def test_host_metrics_scrape_interval_is_pinned_regardless_of_global():
 
     assert '  scrape_interval = "15s"' in config
     assert '  scrape_interval = "1m"' not in config
+
+
+def test_host_metrics_netstat_preserves_defaults_and_adds_tcp_fields():
+    config = _host_metrics_builder(host_metrics=HostMetrics()).build()
+    match = re.search(r'netstat \{ fields = "([^"]+)" \}', config)
+    assert match is not None
+    fields = re.compile(match.group(1))
+
+    # Exercise every alternative in Alloy's default allowlist, including wildcards.
+    # https://github.com/grafana/alloy/blob/v1.20.1/internal/static/integrations/node_exporter/config.go
+    default_fields = [
+        "Ip_InErrors",
+        "Tcp_InErrs",
+        "Ip_Forwarding",
+        "Ip6_InOctets",
+        "Ip6_OutOctets",
+        "IpExt_InOctets",
+        "IpExt_OutOctets",
+        "Icmp_InMsgs",
+        "Icmp_OutMsgs",
+        "Icmp6_InMsgs",
+        "Icmp6_OutMsgs",
+        "TcpExt_ListenOverflows",
+        "TcpExt_ListenDrops",
+        "TcpExt_SyncookiesSent",
+        "TcpExt_SyncookiesRecv",
+        "TcpExt_SyncookiesFailed",
+        "TcpExt_TCPSynRetrans",
+        "TcpExt_TCPTimeouts",
+        "Tcp_ActiveOpens",
+        "Tcp_InSegs",
+        "Tcp_OutSegs",
+        "Tcp_OutRsts",
+        "Tcp_PassiveOpens",
+        "Tcp_RetransSegs",
+        "Tcp_CurrEstab",
+    ]
+    default_fields.extend(
+        f"{protocol}_{field}"
+        for protocol in ("Udp", "Udp6")
+        for field in ("InDatagrams", "OutDatagrams", "NoPorts", "RcvbufErrors", "SndbufErrors")
+    )
+    additional_fields = [
+        "TcpExt_TCPDSACKRecv",
+        "TcpExt_TCPLossProbes",
+        "TcpExt_TCPToZeroWindowAdv",
+        "TcpExt_TCPFromZeroWindowAdv",
+        "TcpExt_TCPWantZeroWindowAdv",
+        "TcpExt_TCPRcvQDrop",
+        "TcpExt_TCPBacklogDrop",
+    ]
+    for field in default_fields + additional_fields:
+        assert fields.search(field), f"Missing netstat field: {field}"
+    for field in ("Ip_DefaultTTL", "TcpExt_TCPDSACKSent", "prefix_Tcp_ActiveOpens", "Tcp_ActiveOpens_suffix"):
+        assert not fields.search(field), f"Unexpected netstat field: {field}"
 
 
 def test_host_metrics_falls_back_to_the_global_scrape_timeout():

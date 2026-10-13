@@ -1257,11 +1257,8 @@ def test_enable_host_metrics_renders_the_builtin_unix_exporter():
     _, config = _run_and_capture_config(_host_metrics_state(enabled=True))
 
     assert 'prometheus.exporter.unix "node" {' in config
-    assert (
-        "  // Opinionated TCP field selection to help detect TCP-related issues.\n"
-        '  netstat { fields = "TcpExt_(TCPDSACKRecv|TCPLossProbes|TCPToZeroWindowAdv|'
-        'TCPFromZeroWindowAdv|TCPWantZeroWindowAdv|TCPRcvQDrop|TCPBacklogDrop)" }\n'
-    ) in config
+    assert "  // Preserve Alloy's default netstat allowlist and add opinionated TCP diagnostics.\n" in config
+    assert '  netstat { fields = "^(' in config
     assert "  targets = discovery.relabel.node.output" in config
     assert '  job_name = "node-exporter"' in config
     assert "  forward_to = [prometheus.remote_write.metrics.receiver]" in config
@@ -1326,7 +1323,7 @@ def test_host_metrics_off_by_default_renders_no_exporter():
 
     assert "prometheus.exporter.unix" not in config
     assert "netstat {" not in config
-    assert "Opinionated TCP field selection" not in config
+    assert "opinionated TCP diagnostics" not in config
 
 
 def test_host_metrics_alone_configures_without_machine_observability():
