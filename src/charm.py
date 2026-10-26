@@ -49,6 +49,7 @@ try:
     )
     from .custom_args import build_effective_custom_args
     from .grafanacloud_connectivity import probe_endpoint
+    from .host_alert_rules import host_filesystem_rule_groups
     from .outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from .principal_context import PrincipalContext
 except ImportError:
@@ -79,6 +80,7 @@ except ImportError:
     )
     from custom_args import build_effective_custom_args
     from grafanacloud_connectivity import probe_endpoint
+    from host_alert_rules import host_filesystem_rule_groups
     from outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from principal_context import PrincipalContext
 
@@ -379,7 +381,8 @@ class AlloySubCharm(ops.CharmBase):
         previous_states = {
             relation_id: self._load_relation_rule_cache(relation) for relation_id, relation in sorted(relations.items())
         }
-        relation_state = self._bounded_existing_rule_state(previous_states)
+        host_groups = self._host_rule_groups()
+        relation_state = self._bounded_existing_rule_state(previous_states, host_groups)
         for relation_id, relation in sorted(relations.items()):
             desired = self._desired_relation_rule_state(relation, previous_states[relation_id])
             if desired is None:
@@ -391,7 +394,7 @@ class AlloySubCharm(ops.CharmBase):
                 fallback=previous_states[relation_id],
             )
             candidate = self._normalize_ownership_state({**relation_state, relation_id: desired})
-            if not self._rule_state_is_publishable(candidate):
+            if not self._rule_state_is_publishable(candidate, host_groups):
                 logger.warning(
                     "Machine-observability rules on relation %s rejected: publish-size",
                     relation_id,
@@ -400,10 +403,28 @@ class AlloySubCharm(ops.CharmBase):
             if self._store_relation_rule_cache(relation, desired):
                 relation_state = candidate
 
-        prometheus_groups, loki_groups = self._flatten_rule_state(relation_state)
-        publish_rule_groups(self, "send-remote-write", prometheus_groups)
+        principal_prometheus_groups, loki_groups = self._flatten_rule_state(relation_state)
+        publish_rule_groups(self, "send-remote-write", [*host_groups, *principal_prometheus_groups])
         publish_rule_groups(self, "send-loki-logs", loki_groups)
-        self._set_rule_destination_status(prometheus_groups, loki_groups)
+        self._set_rule_destination_status(principal_prometheus_groups, loki_groups)
+
+    def _host_rule_groups(self) -> list[dict[str, object]]:
+        """Return alert groups for the host metrics this unit collects for its principal."""
+        if not self._host_metrics_enabled():
+            return []
+        try:
+            payload = self._observability_payload()
+        except (PayloadDecodeError, PayloadTooLargeError, ValueError):
+            payload = MachineObservabilityPayload()
+        principal = self._principal_context(payload)
+        if principal is None or not principal.application:
+            return []
+        return host_filesystem_rule_groups(
+            model=self.model.name,
+            model_uuid=self.model.uuid,
+            application=principal.application,
+            charm_name=payload.charm_name or principal.charm_name,
+        )
 
     def _set_rule_destination_status(
         self,
@@ -441,13 +462,14 @@ class AlloySubCharm(ops.CharmBase):
     def _bounded_existing_rule_state(
         self,
         previous_states: dict[int, RuleCacheState],
+        host_groups: list[dict[str, object]],
     ) -> dict[int, RuleCacheState]:
         """Admit cached relation states deterministically without exceeding publication limits."""
         admitted: dict[int, RuleCacheState] = {}
         for relation_id, state in sorted(previous_states.items()):
             state = self._without_ownership_conflicts(state, admitted, relation_id=relation_id)
             candidate = {**admitted, relation_id: state}
-            if self._rule_state_is_publishable(candidate):
+            if self._rule_state_is_publishable(candidate, host_groups):
                 admitted = candidate
             else:
                 logger.warning(
@@ -527,13 +549,20 @@ class AlloySubCharm(ops.CharmBase):
         return prometheus_groups, loki_groups
 
     @staticmethod
-    def _rule_state_is_publishable(relation_state: dict[int, RuleCacheState]) -> bool:
+    def _rule_state_is_publishable(
+        relation_state: dict[int, RuleCacheState],
+        host_groups: list[dict[str, object]] | None = None,
+    ) -> bool:
         """Check the exact compact downstream values against a conservative Juju ceiling."""
         try:
-            flattened = AlloySubCharm._flatten_rule_state(relation_state)
+            prometheus_groups, loki_groups = AlloySubCharm._flatten_rule_state(relation_state)
         except (KeyError, TypeError, ValueError):
             return False
-        for groups in flattened:
+        prometheus_groups = [*(host_groups or []), *prometheus_groups]
+        names = [cast(str, group["name"]) for group in prometheus_groups]
+        if len(names) != len(set(names)):
+            return False
+        for groups in (prometheus_groups, loki_groups):
             payload = json.dumps({"groups": groups}, sort_keys=True, separators=(",", ":"))
             if len(payload.encode("utf-8")) > RULE_PUBLICATION_VALUE_LIMIT:
                 return False

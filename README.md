@@ -244,6 +244,27 @@ is opened. Any node-exporter already on the host is left alone.
 - This is a complete pipeline on its own. With it set, the charm renders config
   and reports `host metrics only` without the `machine-observability` relation.
 
+With host metrics on, the leader also publishes one Prometheus rule group,
+`<model-uuid>-<principal-app>-host-filesystem`, on `send-remote-write`. Its
+selectors match the principal's model UUID and application:
+
+| Alert | Fires when | For | Severity |
+| -- | -- | -- | -- |
+| `HostDiskSpaceWarning` | A filesystem is over 80% used | 30m | warning |
+| `HostDiskSpace` | A filesystem is over 90% used | 15m | critical |
+| `HostFilesystemReadOnly` | A filesystem is mounted read-only | 5m | critical |
+| `HostFilesystemDeviceError` | Alloy cannot `statfs` any mount of a device | 15m | warning |
+
+The rules skip pseudo filesystems (`tmpfs`, `overlay`, `squashfs`, snap and
+lxcfs FUSE mounts) and `/run`, `/proc`, `/dev`, `/sys` and snap mounts.
+`HostDiskSpace` matches the opentelemetry-collector charm's rule of the same
+name. A bind mount that Alloy cannot read does not alert while another mount of
+the same device stays readable.
+
+On a space alert, find the growing directory on the named mount and extend or
+prune storage before 90%. On a read-only alert, check `dmesg` for I/O or
+filesystem errors before remounting.
+
 It defaults to `false`
 
 ## Validation Flow
