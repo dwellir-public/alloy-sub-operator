@@ -8,7 +8,7 @@ HOST_FILESYSTEM_GROUP_SUFFIX = "host-filesystem"
 
 # Pseudo and per-boot filesystems never hold node data, so alerts on them are noise.
 _FSTYPE_EXCLUDE = "tmpfs|devtmpfs|overlay|squashfs|fuse\\\\.lxcfs|fuse\\\\.snapfuse"
-_MOUNTPOINT_EXCLUDE = "/run.*|/proc.*|/dev.*|/sys.*|/snap/.*"
+_MOUNTPOINT_EXCLUDE = "/(run|proc|dev|sys|snap)(/.*)?"
 
 
 def host_filesystem_rule_groups(

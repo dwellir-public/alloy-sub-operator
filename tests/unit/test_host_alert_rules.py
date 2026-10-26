@@ -77,6 +77,8 @@ def test_host_rules_stay_off_loki_and_without_host_metrics():
         ("/", False),
         ("/mnt/blockchaindata0", False),
         ("/var/snap/polkadot/common", False),
+        ("/runtime", False),
+        ("/system-data", False),
     ],
 )
 def test_host_rules_skip_only_pseudo_mountpoints(mountpoint, excluded):

@@ -263,6 +263,10 @@ mounts. Snap data under `/var/snap` stays covered.
 name. A bind mount that Alloy cannot read does not alert while another mount of
 the same device stays readable.
 
+Principal rules are admitted first. If the host group would push the published
+rules over the 60 KiB relation limit, the charm skips it, keeps the principal
+rules, logs a warning and reports `host filesystem alert rules skipped: capacity`.
+
 On a space alert, find the growing directory on the named mount and extend or
 prune storage before 90%. On a read-only alert, check `dmesg` for I/O or
 filesystem errors before remounting.
