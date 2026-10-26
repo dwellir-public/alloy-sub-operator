@@ -267,9 +267,14 @@ Principal rules are admitted first. If the host group would push the published
 rules over the 60 KiB relation limit, the charm skips it, keeps the principal
 rules, logs a warning and reports `host filesystem alert rules skipped: capacity`.
 
-On a space alert, find the growing directory on the named mount and extend or
-prune storage before 90%. On a read-only alert, check `dmesg` for I/O or
-filesystem errors before remounting.
+Each alert carries a `runbook_url` and a `[GRA-####]` summary prefix. The
+runbooks are shared with `alloy-vm`, which publishes the same alerts:
+[GRA-0019](https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks/gra_0019_host_disk_space)
+for both space alerts,
+[GRA-0020](https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks/gra_0020_host_filesystem_read_only)
+for read-only mounts and
+[GRA-0021](https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks/gra_0021_host_filesystem_device_error)
+for unreadable devices.
 
 ## Validation Flow
 

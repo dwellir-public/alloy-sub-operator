@@ -60,6 +60,16 @@ def test_host_metrics_publish_filesystem_rules_scoped_to_principal():
     assert rules["HostDiskSpaceWarning"]["labels"]["severity"] == "warning"
     assert rules["HostDiskSpaceWarning"]["expr"].endswith("> 80")
     assert " unless on (instance, device) " in rules["HostFilesystemDeviceError"]["expr"]
+    base = "https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks"
+    runbooks = {
+        "HostDiskSpaceWarning": ("GRA-0019", f"{base}/gra_0019_host_disk_space"),
+        "HostDiskSpace": ("GRA-0019", f"{base}/gra_0019_host_disk_space"),
+        "HostFilesystemReadOnly": ("GRA-0020", f"{base}/gra_0020_host_filesystem_read_only"),
+        "HostFilesystemDeviceError": ("GRA-0021", f"{base}/gra_0021_host_filesystem_device_error"),
+    }
+    for alert, (runbook_id, url) in runbooks.items():
+        assert rules[alert]["annotations"]["summary"].startswith(f"[{runbook_id}] ")
+        assert rules[alert]["annotations"]["runbook_url"] == url
 
 
 def test_host_rules_stay_off_loki_and_without_host_metrics():

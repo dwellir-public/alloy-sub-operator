@@ -10,6 +10,11 @@ HOST_FILESYSTEM_GROUP_SUFFIX = "host-filesystem"
 _FSTYPE_EXCLUDE = "tmpfs|devtmpfs|overlay|squashfs|fuse\\\\.lxcfs|fuse\\\\.snapfuse"
 _MOUNTPOINT_EXCLUDE = "/(run|proc|dev|sys|snap)(/.*)?"
 
+_RUNBOOKS = "https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks"
+_DISK_SPACE_RUNBOOK = ("GRA-0019", f"{_RUNBOOKS}/gra_0019_host_disk_space")
+_READ_ONLY_RUNBOOK = ("GRA-0020", f"{_RUNBOOKS}/gra_0020_host_filesystem_read_only")
+_DEVICE_ERROR_RUNBOOK = ("GRA-0021", f"{_RUNBOOKS}/gra_0021_host_filesystem_device_error")
+
 
 def host_filesystem_rule_groups(
     *, model: str, model_uuid: str, application: str, charm_name: str
@@ -33,6 +38,7 @@ def host_filesystem_rule_groups(
     )
     used_percent = f"100 * (1 - node_filesystem_avail_bytes{{{selector}}} / node_filesystem_size_bytes{{{selector}}})"
     labels = {**topology, **({"juju_charm": charm_name} if charm_name else {})}
+    mount = "'{{ $labels.mountpoint }}'"
     where = "on {{ $labels.instance }} (unit {{ $labels.juju_unit }} in model {{ $labels.juju_model }})"
     rules: list[dict[str, object]] = [
         {
@@ -41,7 +47,8 @@ def host_filesystem_rule_groups(
             "for": "30m",
             "labels": {**labels, "severity": "warning"},
             "annotations": {
-                "summary": f"Filesystem '{{{{ $labels.mountpoint }}}}' is over 80% full {where}",
+                "summary": f"[{_DISK_SPACE_RUNBOOK[0]}] Filesystem {mount} is over 80% full {where}",
+                "runbook_url": _DISK_SPACE_RUNBOOK[1],
                 "description": (
                     "Filesystem '{{ $labels.mountpoint }}' ({{ $labels.device }}) uses "
                     '{{ $value | printf "%.1f" }}% of its space.'
@@ -54,7 +61,8 @@ def host_filesystem_rule_groups(
             "for": "15m",
             "labels": {**labels, "severity": "critical"},
             "annotations": {
-                "summary": f"Filesystem '{{{{ $labels.mountpoint }}}}' is over 90% full {where}",
+                "summary": f"[{_DISK_SPACE_RUNBOOK[0]}] Filesystem {mount} is over 90% full {where}",
+                "runbook_url": _DISK_SPACE_RUNBOOK[1],
                 "description": (
                     "Filesystem '{{ $labels.mountpoint }}' ({{ $labels.device }}) uses "
                     '{{ $value | printf "%.1f" }}% of its space.'
@@ -67,7 +75,8 @@ def host_filesystem_rule_groups(
             "for": "5m",
             "labels": {**labels, "severity": "critical"},
             "annotations": {
-                "summary": f"Filesystem '{{{{ $labels.mountpoint }}}}' is read-only {where}",
+                "summary": f"[{_READ_ONLY_RUNBOOK[0]}] Filesystem {mount} is read-only {where}",
+                "runbook_url": _READ_ONLY_RUNBOOK[1],
                 "description": (
                     "Filesystem '{{ $labels.mountpoint }}' ({{ $labels.device }}) is mounted "
                     "read-only. The kernel may have remounted it after an I/O or filesystem error."
@@ -85,7 +94,8 @@ def host_filesystem_rule_groups(
             "for": "15m",
             "labels": {**labels, "severity": "warning"},
             "annotations": {
-                "summary": f"Alloy cannot read filesystem '{{{{ $labels.mountpoint }}}}' {where}",
+                "summary": f"[{_DEVICE_ERROR_RUNBOOK[0]}] Alloy cannot read filesystem {mount} {where}",
+                "runbook_url": _DEVICE_ERROR_RUNBOOK[1],
                 "description": (
                     "statfs failed for '{{ $labels.mountpoint }}' ({{ $labels.device }}) and no other "
                     "mount of that device is readable. Space alerts for this device are blind until "
