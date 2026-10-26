@@ -419,9 +419,10 @@ class AlloySubCharm(ops.CharmBase):
         principal = self._principal_context(payload)
         if principal is None or not principal.application:
             return []
+        # Match the topology the host metrics carry, which may come from the payload.
         return host_filesystem_rule_groups(
-            model=self.model.name,
-            model_uuid=self.model.uuid,
+            model=principal.model or self.model.name,
+            model_uuid=principal.model_uuid or self.model.uuid,
             application=principal.application,
             charm_name=payload.charm_name or principal.charm_name,
         )
