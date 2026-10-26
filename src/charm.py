@@ -49,6 +49,7 @@ try:
     )
     from .custom_args import build_effective_custom_args
     from .grafanacloud_connectivity import probe_endpoint
+    from .host_alert_rules import host_filesystem_rule_groups
     from .outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from .principal_context import PrincipalContext
 except ImportError:
@@ -79,6 +80,7 @@ except ImportError:
     )
     from custom_args import build_effective_custom_args
     from grafanacloud_connectivity import probe_endpoint
+    from host_alert_rules import host_filesystem_rule_groups
     from outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from principal_context import PrincipalContext
 
@@ -401,9 +403,47 @@ class AlloySubCharm(ops.CharmBase):
                 relation_state = candidate
 
         prometheus_groups, loki_groups = self._flatten_rule_state(relation_state)
-        publish_rule_groups(self, "send-remote-write", prometheus_groups)
+        host_groups = self._admitted_host_rule_groups(prometheus_groups)
+        publish_rule_groups(self, "send-remote-write", [*(host_groups or []), *prometheus_groups])
         publish_rule_groups(self, "send-loki-logs", loki_groups)
         self._set_rule_destination_status(prometheus_groups, loki_groups)
+        if host_groups is None and isinstance(self.unit.status, ops.ActiveStatus):
+            self.unit.status = ops.ActiveStatus(self._status_message("host filesystem alert rules skipped: capacity"))
+
+    def _admitted_host_rule_groups(self, principal_groups: list[dict[str, object]]) -> list[dict[str, object]] | None:
+        """Return host groups, or None if they do not fit beside the admitted principal rules.
+
+        Principal rules are admitted first, so host rules never displace them.
+        """
+        host_groups = self._host_rule_groups()
+        if not host_groups:
+            return []
+        groups = [*host_groups, *principal_groups]
+        names = [cast(str, group["name"]) for group in groups]
+        payload = json.dumps({"groups": groups}, sort_keys=True, separators=(",", ":"))
+        if len(names) == len(set(names)) and len(payload.encode("utf-8")) <= RULE_PUBLICATION_VALUE_LIMIT:
+            return host_groups
+        logger.warning("Host filesystem alert rules skipped: publish-size or name conflict")
+        return None
+
+    def _host_rule_groups(self) -> list[dict[str, object]]:
+        """Return alert groups for the host metrics this unit collects for its principal."""
+        if not self._host_metrics_enabled():
+            return []
+        try:
+            payload = self._observability_payload()
+        except (PayloadDecodeError, PayloadTooLargeError, ValueError):
+            payload = MachineObservabilityPayload()
+        principal = self._principal_context(payload)
+        if principal is None or not principal.application:
+            return []
+        # Match the topology the host metrics carry, which may come from the payload.
+        return host_filesystem_rule_groups(
+            model=principal.model or self.model.name,
+            model_uuid=principal.model_uuid or self.model.uuid,
+            application=principal.application,
+            charm_name=payload.charm_name or principal.charm_name,
+        )
 
     def _set_rule_destination_status(
         self,

@@ -1199,6 +1199,33 @@ def test_downstream_value_overflow_retains_prior_durable_state(monkeypatch, capl
     assert "X" * 2000 not in caplog.text
 
 
+def test_host_rules_never_displace_principal_rules_near_capacity(monkeypatch, caplog):
+    import ops
+
+    import src.charm as charm_module
+
+    monkeypatch.setattr(charm_module.AlloySubCharm, "_configure", lambda *args, **kwargs: True)
+    harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
+    harness.begin()
+    machine = harness.add_relation("machine-observability", "polkadot")
+    prometheus = harness.add_relation("send-remote-write", "mimir")
+    harness.update_relation_data(
+        machine,
+        "polkadot",
+        {"payload": json.dumps(_v3_payload(_rule_artifact("prometheus_alert_rules", "good", "LAST-GOOD")))},
+    )
+    principal_payload = harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"]
+    monkeypatch.setattr(charm_module, "RULE_PUBLICATION_VALUE_LIMIT", len(principal_payload.encode()) + 50)
+    harness.charm.unit.status = ops.ActiveStatus("ready")
+
+    harness.update_config({"enable-host-metrics": True})
+
+    assert harness.get_relation_data(prometheus, harness.charm.app.name)["alert_rules"] == principal_payload
+    assert "Host filesystem alert rules skipped" in caplog.text
+    assert "host filesystem alert rules skipped: capacity" in harness.charm.unit.status.message
+
+
 def test_multi_relation_aggregate_overflow_admits_states_deterministically(monkeypatch):
     import src.charm as charm_module
 

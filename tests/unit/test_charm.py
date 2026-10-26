@@ -1512,3 +1512,33 @@ def test_no_machine_observability_and_no_host_metrics_still_waits():
     assert state_out.unit_status == testing.WaitingStatus(
         "Alloy service down; config waiting for machine-observability relation"
     )
+
+
+def test_host_rules_follow_source_topology_without_juju_info():
+    ctx = testing.Context(AlloySubCharm)
+    state = testing.State(
+        config={"enable-host-metrics": True},
+        relations=[
+            testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="reference",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        schema_version=2,
+                        charm_name="reference-charm",
+                        source_topology=SOURCE_TOPOLOGY,
+                    )
+                },
+            ),
+        ],
+        leader=True,
+    )
+
+    with ctx(ctx.on.update_status(), state) as manager:
+        [group] = manager.charm._host_rule_groups()
+
+    assert group["name"] == "payload-uuid-reference-host-filesystem"
+    for rule in group["rules"]:
+        assert 'juju_model_uuid="payload-uuid"' in rule["expr"]
+        assert 'juju_model="payload-model"' in rule["expr"]

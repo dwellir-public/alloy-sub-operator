@@ -243,8 +243,38 @@ is opened. Any node-exporter already on the host is left alone.
   `global_scrape_timeout` applies.
 - This is a complete pipeline on its own. With it set, the charm renders config
   and reports `host metrics only` without the `machine-observability` relation.
+- It defaults to `false`.
 
-It defaults to `false`
+With host metrics on, the leader also publishes one Prometheus rule group,
+`<model-uuid>-<principal-app>-host-filesystem`, on `send-remote-write`. Its
+selectors match the principal's model UUID and application:
+
+| Alert | Fires when | For | Severity |
+| -- | -- | -- | -- |
+| `HostDiskSpaceWarning` | A filesystem is over 80% used | 30m | warning |
+| `HostDiskSpace` | A filesystem is over 90% used | 15m | critical |
+| `HostFilesystemReadOnly` | A filesystem is mounted read-only | 5m | critical |
+| `HostFilesystemDeviceError` | Alloy cannot `statfs` any mount of a device | 15m | warning |
+
+The rules skip pseudo filesystems (`tmpfs`, `overlay`, `squashfs`, snap and
+lxcfs FUSE mounts) and `/run`, `/proc`, `/dev`, `/sys` and `/snap` image
+mounts. Snap data under `/var/snap` stays covered.
+`HostDiskSpace` matches the opentelemetry-collector charm's rule of the same
+name. A bind mount that Alloy cannot read does not alert while another mount of
+the same device stays readable.
+
+Principal rules are admitted first. If the host group would push the published
+rules over the 60 KiB relation limit, the charm skips it, keeps the principal
+rules, logs a warning and reports `host filesystem alert rules skipped: capacity`.
+
+Each alert carries a `runbook_url` and a `[GRA-####]` summary prefix. The
+runbooks are shared with `alloy-vm`, which publishes the same alerts:
+[GRA-0019](https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks/gra_0019_host_disk_space)
+for both space alerts,
+[GRA-0020](https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks/gra_0020_host_filesystem_read_only)
+for read-only mounts and
+[GRA-0021](https://docs.internal.dwellir.com/docs/operations/grafana_alert_runbooks/gra_0021_host_filesystem_device_error)
+for unreadable devices.
 
 ## Validation Flow
 
