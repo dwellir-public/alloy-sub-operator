@@ -1,7 +1,9 @@
 import json
+import re
 import sys
 from pathlib import Path
 
+import pytest
 from ops import testing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -65,9 +67,20 @@ def test_host_rules_stay_off_loki_and_without_host_metrics():
     assert _published(_harness(host_metrics=False), "send-remote-write", "prometheus") == []
 
 
-def test_host_rules_exclude_pseudo_filesystems():
+@pytest.mark.parametrize(
+    ("mountpoint", "excluded"),
+    [
+        ("/run/user/1000", True),
+        ("/proc/sys/fs/binfmt_misc", True),
+        ("/dev/shm", True),
+        ("/snap/core22/1380", True),
+        ("/", False),
+        ("/mnt/blockchaindata0", False),
+        ("/var/snap/polkadot/common", False),
+    ],
+)
+def test_host_rules_skip_only_pseudo_mountpoints(mountpoint, excluded):
     [group] = host_filesystem_rule_groups(model="m", model_uuid="u", application="nitro", charm_name="")
-    for rule in group["rules"]:
-        assert 'fstype!~"tmpfs|' in rule["expr"]
-        assert 'mountpoint!~"/run.*|' in rule["expr"]
-        assert "juju_charm" not in rule["labels"]
+    [pattern] = {re.search(r'mountpoint!~"([^"]*)"', rule["expr"]).group(1) for rule in group["rules"]}
+    # Prometheus anchors label regexes, so fullmatch mirrors its evaluation.
+    assert bool(re.fullmatch(pattern, mountpoint)) is excluded

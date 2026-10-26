@@ -552,14 +552,14 @@ class AlloySubCharm(ops.CharmBase):
     @staticmethod
     def _rule_state_is_publishable(
         relation_state: dict[int, RuleCacheState],
-        host_groups: list[dict[str, object]] | None = None,
+        host_groups: list[dict[str, object]],
     ) -> bool:
         """Check the exact compact downstream values against a conservative Juju ceiling."""
         try:
             prometheus_groups, loki_groups = AlloySubCharm._flatten_rule_state(relation_state)
         except (KeyError, TypeError, ValueError):
             return False
-        prometheus_groups = [*(host_groups or []), *prometheus_groups]
+        prometheus_groups = [*host_groups, *prometheus_groups]
         names = [cast(str, group["name"]) for group in prometheus_groups]
         if len(names) != len(set(names)):
             return False

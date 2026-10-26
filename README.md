@@ -256,7 +256,8 @@ selectors match the principal's model UUID and application:
 | `HostFilesystemDeviceError` | Alloy cannot `statfs` any mount of a device | 15m | warning |
 
 The rules skip pseudo filesystems (`tmpfs`, `overlay`, `squashfs`, snap and
-lxcfs FUSE mounts) and `/run`, `/proc`, `/dev`, `/sys` and snap mounts.
+lxcfs FUSE mounts) and `/run`, `/proc`, `/dev`, `/sys` and `/snap` image mounts. Snap data under
+`/var/snap` stays covered.
 `HostDiskSpace` matches the opentelemetry-collector charm's rule of the same
 name. A bind mount that Alloy cannot read does not alert while another mount of
 the same device stays readable.

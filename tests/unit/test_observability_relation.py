@@ -1346,7 +1346,7 @@ def test_duplicate_final_group_name_makes_candidate_unpublishable():
         }
     }
 
-    assert not AlloySubCharm._rule_state_is_publishable(relation_state)
+    assert not AlloySubCharm._rule_state_is_publishable(relation_state, [])
 
 
 @pytest.mark.parametrize(
