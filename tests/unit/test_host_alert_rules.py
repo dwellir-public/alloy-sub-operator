@@ -84,3 +84,25 @@ def test_host_rules_skip_only_pseudo_mountpoints(mountpoint, excluded):
     [pattern] = {re.search(r'mountpoint!~"([^"]*)"', rule["expr"]).group(1) for rule in group["rules"]}
     # Prometheus anchors label regexes, so fullmatch mirrors its evaluation.
     assert bool(re.fullmatch(pattern, mountpoint)) is excluded
+
+
+@pytest.mark.parametrize(
+    ("fstype", "excluded"),
+    [
+        ("tmpfs", True),
+        ("squashfs", True),
+        ("fuse.lxcfs", True),
+        ("fuse.snapfuse", True),
+        ("xfs", False),
+        ("ext4", False),
+        ("fuseblk", False),
+    ],
+)
+def test_host_rules_skip_only_pseudo_fstypes(fstype, excluded):
+    [group] = host_filesystem_rule_groups(model="m", model_uuid="u", application="nitro", charm_name="")
+    [quoted] = {
+        re.search(r'fstype!~("[^"]*")', rule["expr"]).group(1) for rule in group["rules"] if "fstype!~" in rule["expr"]
+    }
+    # Decode the PromQL string literal the way Prometheus does before compiling the regex.
+    pattern = json.loads(quoted)
+    assert bool(re.fullmatch(pattern, fstype)) is excluded
