@@ -239,7 +239,7 @@ juju config alloy-sub enable-host-metrics=true
 Alloy collects these itself, so nothing is installed on the machine and no port
 is opened. Any node-exporter already on the host is left alone.
 
-- The job scrapes every 15s regardless of `global_scrape_interval`; only
+- The job scrapes every 60s regardless of `global_scrape_interval`; only
   `global_scrape_timeout` applies.
 - This is a complete pipeline on its own. With it set, the charm renders config
   and reports `host metrics only` without the `machine-observability` relation.

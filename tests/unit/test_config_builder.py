@@ -276,7 +276,7 @@ def test_build_renders_exporter_relabel_and_scrape_for_host_metrics():
 def test_host_metrics_scrape_interval_is_pinned_regardless_of_global():
     config = _host_metrics_builder(host_metrics=HostMetrics()).build()
 
-    assert '  scrape_interval = "15s"' in config
+    assert '  scrape_interval = "60s"' in config
     assert '  scrape_interval = "1m"' not in config
 
 

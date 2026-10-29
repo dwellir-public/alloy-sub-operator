@@ -25,7 +25,7 @@ HOST_METRICS_JOB_NAME = "node-exporter"
 
 # Host metrics are cheap and their value is in the resolution, so this job is
 # pinned here rather than following the charm's global scrape interval.
-HOST_METRICS_SCRAPE_INTERVAL = "15s"
+HOST_METRICS_SCRAPE_INTERVAL = "60s"
 
 
 @dataclass(frozen=True)
