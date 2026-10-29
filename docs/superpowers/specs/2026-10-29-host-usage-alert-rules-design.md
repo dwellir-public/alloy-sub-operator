@@ -37,7 +37,10 @@ host metrics are disabled. No downstream charm or interface changes.
 
 ### Rule content
 
-One Prometheus rule group named `<model uuid>-<alloy-sub application name>-host-metrics`
+One Prometheus rule group named `<model uuid>-<principal application name>-host-metrics`
+(revised 2026-10-29: the owner wants the principal's name, not this charm's;
+this assumes one alloy-sub application per principal, which is also the only
+layout that does not scrape each host twice)
 containing, in this order. The model UUID is part of the name because
 `mimir-vm` merges every `receive-remote-write` relation into one ruler
 namespace and rejects duplicate group names across relations; two models with

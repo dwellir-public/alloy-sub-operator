@@ -15,19 +15,15 @@ DISK_MATCHER = f'{BASE_MATCHER},fstype!~"tmpfs|devtmpfs|overlay|squashfs|iso9660
 
 
 def _rules():
-    groups = build_host_alert_rule_groups(
-        model_uuid=MODEL_UUID, application="alloy-sub", principal_application="polkadot"
-    )
+    groups = build_host_alert_rule_groups(model_uuid=MODEL_UUID, principal_application="polkadot")
     assert len(groups) == 1
     return groups[0]["rules"]
 
 
-def test_build_returns_one_group_named_after_the_model_and_application():
+def test_build_returns_one_group_named_after_the_model_and_principal():
     """Receivers merge every relation into one namespace, so the name must be unique across models."""
-    groups = build_host_alert_rule_groups(
-        model_uuid=MODEL_UUID, application="alloy-sub", principal_application="polkadot"
-    )
-    assert [group["name"] for group in groups] == [f"{MODEL_UUID}-alloy-sub-host-metrics"]
+    groups = build_host_alert_rule_groups(model_uuid=MODEL_UUID, principal_application="polkadot")
+    assert [group["name"] for group in groups] == [f"{MODEL_UUID}-polkadot-host-metrics"]
     assert set(groups[0]) == {"name", "rules"}
 
 
@@ -86,12 +82,10 @@ def test_annotations_name_the_unit_mountpoint_and_value():
 
 
 def test_model_uuid_and_principal_are_json_escaped_in_matchers():
-    groups = build_host_alert_rule_groups(model_uuid='a"b\\c', application="alloy-sub", principal_application='p"q')
+    groups = build_host_alert_rule_groups(model_uuid='a"b\\c', principal_application='p"q')
     expr = groups[0]["rules"][0]["expr"]
     assert 'juju_model_uuid="a\\"b\\\\c",juju_application="p\\"q"' in expr
 
 
 def test_groups_pass_the_backend_rule_schema():
-    assert validate_rule_groups(
-        build_host_alert_rule_groups(model_uuid=MODEL_UUID, application="alloy-sub", principal_application="polkadot")
-    )
+    assert validate_rule_groups(build_host_alert_rule_groups(model_uuid=MODEL_UUID, principal_application="polkadot"))

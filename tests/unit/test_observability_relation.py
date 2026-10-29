@@ -1376,12 +1376,12 @@ def test_host_alert_group_is_appended_after_principal_groups(monkeypatch):
     published = json.loads(harness.get_relation_data(prometheus, "alloy-sub")["alert_rules"])["groups"]
     names = [group["name"] for group in published]
     assert len(names) == 2
-    assert names[-1] == f"{harness.model.uuid}-alloy-sub-host-metrics"
+    assert names[-1] == f"{harness.model.uuid}-polkadot-host-metrics"
     assert json.loads(harness.get_relation_data(loki, "alloy-sub")["alert_rules"]) == {"groups": []}
 
 
 def test_host_alert_groups_count_toward_publication_size():
-    host_groups = build_host_alert_rule_groups(model_uuid="uuid", application="alloy-sub", principal_application="app")
+    host_groups = build_host_alert_rule_groups(model_uuid="uuid", principal_application="app")
 
     def _state(expr):
         return {

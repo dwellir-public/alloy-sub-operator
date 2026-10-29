@@ -1202,7 +1202,6 @@ class AlloySubCharm(ops.CharmBase):
             return []
         return build_host_alert_rule_groups(
             model_uuid=self.model.uuid,
-            application=self.app.name,
             principal_application=principal_context.application,
         )
 

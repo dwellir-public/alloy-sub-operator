@@ -66,7 +66,7 @@ def test_enabling_host_metrics_publishes_the_host_alert_group(monkeypatch):
     harness.update_config({"enable-host-metrics": True})
 
     assert _published_groups(harness, relation_id) == build_host_alert_rule_groups(
-        model_uuid=MODEL_UUID, application="alloy-sub", principal_application="polkadot"
+        model_uuid=MODEL_UUID, principal_application="polkadot"
     )
 
 

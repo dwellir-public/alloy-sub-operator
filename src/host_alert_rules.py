@@ -36,19 +36,13 @@ def _usage_rule(
     }
 
 
-def build_host_alert_rule_groups(
-    *,
-    model_uuid: str,
-    application: str,
-    principal_application: str,
-) -> list[dict[str, object]]:
+def build_host_alert_rule_groups(*, model_uuid: str, principal_application: str) -> list[dict[str, object]]:
     """Return one Prometheus rule group alerting on the attached principal's host usage.
 
-    ``application`` names this charm and only scopes the group name;
     ``principal_application`` is what the scraped series carry in
-    ``juju_application``, so it scopes the expressions. Matching the principal
-    keeps two alloy-sub applications in one model from evaluating the same
-    hosts twice.
+    ``juju_application``, so it scopes the expressions and names the group.
+    Matching the principal keeps two alloy-sub applications in one model from
+    evaluating the same hosts twice.
     """
     base_matcher = f"juju_model_uuid={json.dumps(model_uuid)},juju_application={json.dumps(principal_application)}"
     disk_matcher = f"{base_matcher},fstype!~{json.dumps(HOST_DISK_FSTYPE_EXCLUDE)}"
@@ -83,4 +77,6 @@ def build_host_alert_rule_groups(
         )
     # Receivers such as mimir-vm merge every relation into one ruler namespace and
     # reject duplicate group names, so the name must be unique across models too.
-    return [{"name": f"{model_uuid}-{application}-{HOST_ALERT_GROUP_SUFFIX}", "rules": rules}]
+    # Naming by principal assumes one alloy-sub application per principal, which
+    # is also the only layout that does not scrape each host twice.
+    return [{"name": f"{model_uuid}-{principal_application}-{HOST_ALERT_GROUP_SUFFIX}", "rules": rules}]
