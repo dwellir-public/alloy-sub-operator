@@ -1381,7 +1381,7 @@ def test_host_alert_group_is_appended_after_principal_groups(monkeypatch):
 
 
 def test_host_alert_groups_count_toward_publication_size():
-    host_groups = build_host_alert_rule_groups(model_uuid="uuid", application="alloy-sub")
+    host_groups = build_host_alert_rule_groups(model_uuid="uuid", application="alloy-sub", principal_application="app")
 
     def _state(expr):
         return {

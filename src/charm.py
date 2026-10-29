@@ -1186,10 +1186,25 @@ class AlloySubCharm(ops.CharmBase):
         return bool(self.config.get("enable-host-metrics", False))
 
     def _host_alert_rule_groups(self) -> list[dict[str, object]]:
-        """Return charm-owned host usage alert groups when host metrics are enabled."""
+        """Return charm-owned host usage alert groups when host metrics are enabled.
+
+        The rules are scoped to the attached principal, the same topology the
+        rendered host-metrics series carry. Without a principal no host metrics
+        are rendered either, so there is nothing to alert on.
+        """
         if not self._host_metrics_enabled():
             return []
-        return build_host_alert_rule_groups(model_uuid=self.model.uuid, application=self.app.name)
+        try:
+            principal_context = self._principal_context()
+        except (PayloadDecodeError, PayloadTooLargeError, ValueError):
+            return []
+        if principal_context is None:
+            return []
+        return build_host_alert_rule_groups(
+            model_uuid=self.model.uuid,
+            application=self.app.name,
+            principal_application=principal_context.application,
+        )
 
     def _queue_size(self) -> int:
         """Return queue size for outbound telemetry buffering."""

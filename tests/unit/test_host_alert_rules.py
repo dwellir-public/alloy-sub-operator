@@ -8,21 +8,25 @@ from alert_rules import validate_rule_groups
 from host_alert_rules import build_host_alert_rule_groups
 
 MODEL_UUID = "00000000-0000-4000-8000-000000000222"
-# Model-wide: the series carry the principal's topology, and the leader only knows its own
-# principal, so neither a job nor a juju_application matcher can scope the rules correctly.
-BASE_MATCHER = f'juju_model_uuid="{MODEL_UUID}"'
+# The series carry the principal's topology, so each alloy-sub application alerts only on
+# the hosts of the principal it is attached to; two apps in one model never evaluate twice.
+BASE_MATCHER = f'juju_model_uuid="{MODEL_UUID}",juju_application="polkadot"'
 DISK_MATCHER = f'{BASE_MATCHER},fstype!~"tmpfs|devtmpfs|overlay|squashfs|iso9660|ramfs"'
 
 
 def _rules():
-    groups = build_host_alert_rule_groups(model_uuid=MODEL_UUID, application="alloy-sub")
+    groups = build_host_alert_rule_groups(
+        model_uuid=MODEL_UUID, application="alloy-sub", principal_application="polkadot"
+    )
     assert len(groups) == 1
     return groups[0]["rules"]
 
 
 def test_build_returns_one_group_named_after_the_model_and_application():
     """Receivers merge every relation into one namespace, so the name must be unique across models."""
-    groups = build_host_alert_rule_groups(model_uuid=MODEL_UUID, application="alloy-sub")
+    groups = build_host_alert_rule_groups(
+        model_uuid=MODEL_UUID, application="alloy-sub", principal_application="polkadot"
+    )
     assert [group["name"] for group in groups] == [f"{MODEL_UUID}-alloy-sub-host-metrics"]
     assert set(groups[0]) == {"name", "rules"}
 
@@ -81,11 +85,13 @@ def test_annotations_name_the_unit_mountpoint_and_value():
     }
 
 
-def test_model_uuid_is_json_escaped_in_matchers():
-    groups = build_host_alert_rule_groups(model_uuid='a"b\\c', application="alloy-sub")
+def test_model_uuid_and_principal_are_json_escaped_in_matchers():
+    groups = build_host_alert_rule_groups(model_uuid='a"b\\c', application="alloy-sub", principal_application='p"q')
     expr = groups[0]["rules"][0]["expr"]
-    assert 'juju_model_uuid="a\\"b\\\\c"' in expr
+    assert 'juju_model_uuid="a\\"b\\\\c",juju_application="p\\"q"' in expr
 
 
 def test_groups_pass_the_backend_rule_schema():
-    assert validate_rule_groups(build_host_alert_rule_groups(model_uuid=MODEL_UUID, application="alloy-sub"))
+    assert validate_rule_groups(
+        build_host_alert_rule_groups(model_uuid=MODEL_UUID, application="alloy-sub", principal_application="polkadot")
+    )

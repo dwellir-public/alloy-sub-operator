@@ -29,7 +29,7 @@ host metrics are disabled. No downstream charm or interface changes.
 | Disk usage | `100 * (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes)` |
 | Thresholds | fixed constants in the charm: warning `> 80`, critical `> 90` |
 | `for` duration | `5m` on all four rules |
-| Alert scope | all hosts in the model: matcher `juju_model_uuid="<model uuid>"` only (revised 2026-10-29: `job` dropped at the owner's request; `juju_application` cannot be used because the series carry the principal's application, not this charm's) |
+| Alert scope | the leader's principal application: matcher `juju_model_uuid="<model uuid>",juju_application="<principal application>"` (revised 2026-10-29: originally model-wide with `job="node-exporter"`; the owner wants no duplicate alerts when two alloy-sub applications share a model, and the series carry the principal's application rather than this charm's, so the leader's principal from juju-info is the scope) |
 | Severity labels | `severity: warning` / `severity: critical`; no other rule labels |
 | Both fire | warning and critical both fire above 90%; suppression is Alertmanager inhibition, out of scope |
 

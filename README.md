@@ -263,8 +263,11 @@ named `<model-uuid>-<application>-host-metrics` on
 - Disk usage is `1 - avail / size` for every mounted filesystem except
   `tmpfs`, `devtmpfs`, `overlay`, `squashfs`, `iso9660`, and `ramfs`; one alert
   per unit and mountpoint. Memory usage is `1 - MemAvailable / MemTotal`.
-- The rules match on `juju_model_uuid` only, so they cover all units of every
-  principal application this charm is attached to. Alerts carry the series'
+- The rules match `juju_model_uuid` and the `juju_application` of the
+  principal the leader is attached to, so each alloy-sub application alerts
+  only on the hosts it scrapes and two applications in one model never
+  evaluate the same host twice. An alloy-sub application attached to several
+  principals alarms only the leader's principal. Alerts carry the series'
   Juju topology labels; the rule adds only `severity`. The model UUID in the
   group name keeps it unique when several models feed one Mimir ruler
   namespace, which rejects duplicate group names.
