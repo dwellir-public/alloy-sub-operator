@@ -246,6 +246,32 @@ is opened. Any node-exporter already on the host is left alone.
 
 It defaults to `false`
 
+### Built-in host alarms
+
+While host metrics are enabled, the leader publishes one Prometheus rule group
+named `<application>-host-metrics` (for example `alloy-sub-host-metrics`) on
+`send-remote-write`, alongside any principal rules:
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `HostDiskUsageWarning` | filesystem usage above 80% | `warning` |
+| `HostDiskUsageCritical` | filesystem usage above 90% | `critical` |
+| `HostMemoryUsageWarning` | memory usage above 80% | `warning` |
+| `HostMemoryUsageCritical` | memory usage above 90% | `critical` |
+
+- Usage must stay above the threshold for `5m` before an alert fires.
+- Disk usage is `1 - avail / size` for every mounted filesystem except
+  `tmpfs`, `devtmpfs`, `overlay`, `squashfs`, `iso9660`, and `ramfs`; one alert
+  per unit and mountpoint. Memory usage is `1 - MemAvailable / MemTotal`.
+- The rules match every `node-exporter` series in the model, so they cover
+  all units of every principal application this charm is attached to. Alerts
+  carry the series' Juju topology labels; the rule adds only `severity`.
+- Warning and critical both fire above 90%. Silence the warning with an
+  Alertmanager inhibition rule if you only want one notification.
+- Rules travel only on `send-remote-write`; Grafana Cloud forwarding via
+  `grafana-cloud-config` carries metrics but not alert rules.
+- Setting `enable-host-metrics=false` withdraws the group.
+
 ## Validation Flow
 
 Deploy the subordinate and principal, relate both relation endpoints, then inspect
