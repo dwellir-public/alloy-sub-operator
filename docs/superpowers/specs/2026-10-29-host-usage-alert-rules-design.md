@@ -29,7 +29,7 @@ host metrics are disabled. No downstream charm or interface changes.
 | Disk usage | `100 * (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes)` |
 | Thresholds | fixed constants in the charm: warning `> 80`, critical `> 90` |
 | `for` duration | `5m` on all four rules |
-| Alert scope | all hosts in the model: matcher `juju_model_uuid="<model uuid>",job="node-exporter"` |
+| Alert scope | all hosts in the model: matcher `juju_model_uuid="<model uuid>"` only (revised 2026-10-29: `job` dropped at the owner's request; `juju_application` cannot be used because the series carry the principal's application, not this charm's) |
 | Severity labels | `severity: warning` / `severity: critical`; no other rule labels |
 | Both fire | warning and critical both fire above 90%; suppression is Alertmanager inhibition, out of scope |
 
@@ -37,8 +37,12 @@ host metrics are disabled. No downstream charm or interface changes.
 
 ### Rule content
 
-One Prometheus rule group named `<alloy-sub application name>-host-metrics`
-(for example `alloy-sub-host-metrics`) containing, in this order:
+One Prometheus rule group named `<model uuid>-<alloy-sub application name>-host-metrics`
+containing, in this order. The model UUID is part of the name because
+`mimir-vm` merges every `receive-remote-write` relation into one ruler
+namespace and rejects duplicate group names across relations; two models with
+the default application name would otherwise freeze rule delivery for every
+relation.
 
 | alert | expr threshold | severity |
 |---|---|---|

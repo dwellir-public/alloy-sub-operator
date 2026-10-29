@@ -249,7 +249,7 @@ It defaults to `false`
 ### Built-in host alarms
 
 While host metrics are enabled, the leader publishes one Prometheus rule group
-named `<application>-host-metrics` (for example `alloy-sub-host-metrics`) on
+named `<model-uuid>-<application>-host-metrics` on
 `send-remote-write`, alongside any principal rules:
 
 | Alert | Fires when | Severity |
@@ -263,9 +263,11 @@ named `<application>-host-metrics` (for example `alloy-sub-host-metrics`) on
 - Disk usage is `1 - avail / size` for every mounted filesystem except
   `tmpfs`, `devtmpfs`, `overlay`, `squashfs`, `iso9660`, and `ramfs`; one alert
   per unit and mountpoint. Memory usage is `1 - MemAvailable / MemTotal`.
-- The rules match every `node-exporter` series in the model, so they cover
-  all units of every principal application this charm is attached to. Alerts
-  carry the series' Juju topology labels; the rule adds only `severity`.
+- The rules match on `juju_model_uuid` only, so they cover all units of every
+  principal application this charm is attached to. Alerts carry the series'
+  Juju topology labels; the rule adds only `severity`. The model UUID in the
+  group name keeps it unique when several models feed one Mimir ruler
+  namespace, which rejects duplicate group names.
 - Warning and critical both fire above 90%. Silence the warning with an
   Alertmanager inhibition rule if you only want one notification.
 - Rules travel only on `send-remote-write`; Grafana Cloud forwarding via

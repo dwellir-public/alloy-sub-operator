@@ -1376,7 +1376,7 @@ def test_host_alert_group_is_appended_after_principal_groups(monkeypatch):
     published = json.loads(harness.get_relation_data(prometheus, "alloy-sub")["alert_rules"])["groups"]
     names = [group["name"] for group in published]
     assert len(names) == 2
-    assert names[-1] == "alloy-sub-host-metrics"
+    assert names[-1] == f"{harness.model.uuid}-alloy-sub-host-metrics"
     assert json.loads(harness.get_relation_data(loki, "alloy-sub")["alert_rules"]) == {"groups": []}
 
 

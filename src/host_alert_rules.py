@@ -4,11 +4,6 @@ from __future__ import annotations
 
 import json
 
-try:
-    from .config_builder import HOST_METRICS_JOB_NAME
-except ImportError:
-    from config_builder import HOST_METRICS_JOB_NAME
-
 HOST_ALERT_GROUP_SUFFIX = "host-metrics"
 HOST_USAGE_WARNING_PERCENT = 80
 HOST_USAGE_CRITICAL_PERCENT = 90
@@ -42,8 +37,13 @@ def _usage_rule(
 
 
 def build_host_alert_rule_groups(*, model_uuid: str, application: str) -> list[dict[str, object]]:
-    """Return one Prometheus rule group alerting on host disk and memory usage model-wide."""
-    base_matcher = f"juju_model_uuid={json.dumps(model_uuid)},job={json.dumps(HOST_METRICS_JOB_NAME)}"
+    """Return one Prometheus rule group alerting on host disk and memory usage model-wide.
+
+    The matcher is the model UUID alone: the series carry the principal's topology
+    rather than this charm's, and the leader only knows its own principal, so a
+    ``juju_application`` matcher could not cover every host this charm scrapes.
+    """
+    base_matcher = f"juju_model_uuid={json.dumps(model_uuid)}"
     disk_matcher = f"{base_matcher},fstype!~{json.dumps(HOST_DISK_FSTYPE_EXCLUDE)}"
     disk_usage = (
         f"100 * (1 - node_filesystem_avail_bytes{{{disk_matcher}}} / node_filesystem_size_bytes{{{disk_matcher}}})"
@@ -74,4 +74,6 @@ def build_host_alert_rule_groups(*, model_uuid: str, application: str) -> list[d
                 _MEMORY_DESCRIPTION,
             )
         )
-    return [{"name": f"{application}-{HOST_ALERT_GROUP_SUFFIX}", "rules": rules}]
+    # Receivers such as mimir-vm merge every relation into one ruler namespace and
+    # reject duplicate group names, so the name must be unique across models too.
+    return [{"name": f"{model_uuid}-{application}-{HOST_ALERT_GROUP_SUFFIX}", "rules": rules}]

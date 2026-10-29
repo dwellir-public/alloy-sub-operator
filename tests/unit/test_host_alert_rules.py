@@ -8,7 +8,9 @@ from alert_rules import validate_rule_groups
 from host_alert_rules import build_host_alert_rule_groups
 
 MODEL_UUID = "00000000-0000-4000-8000-000000000222"
-BASE_MATCHER = f'juju_model_uuid="{MODEL_UUID}",job="node-exporter"'
+# Model-wide: the series carry the principal's topology, and the leader only knows its own
+# principal, so neither a job nor a juju_application matcher can scope the rules correctly.
+BASE_MATCHER = f'juju_model_uuid="{MODEL_UUID}"'
 DISK_MATCHER = f'{BASE_MATCHER},fstype!~"tmpfs|devtmpfs|overlay|squashfs|iso9660|ramfs"'
 
 
@@ -18,9 +20,10 @@ def _rules():
     return groups[0]["rules"]
 
 
-def test_build_returns_one_group_named_after_the_application():
+def test_build_returns_one_group_named_after_the_model_and_application():
+    """Receivers merge every relation into one namespace, so the name must be unique across models."""
     groups = build_host_alert_rule_groups(model_uuid=MODEL_UUID, application="alloy-sub")
-    assert [group["name"] for group in groups] == ["alloy-sub-host-metrics"]
+    assert [group["name"] for group in groups] == [f"{MODEL_UUID}-alloy-sub-host-metrics"]
     assert set(groups[0]) == {"name", "rules"}
 
 
