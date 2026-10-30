@@ -239,12 +239,46 @@ juju config alloy-sub enable-host-metrics=true
 Alloy collects these itself, so nothing is installed on the machine and no port
 is opened. Any node-exporter already on the host is left alone.
 
-- The job scrapes every 15s regardless of `global_scrape_interval`; only
+- The job scrapes every 60s regardless of `global_scrape_interval`; only
   `global_scrape_timeout` applies.
 - This is a complete pipeline on its own. With it set, the charm renders config
   and reports `host metrics only` without the `machine-observability` relation.
 
 It defaults to `false`
+
+### Built-in host alarms
+
+While host metrics are enabled, the leader publishes one Prometheus rule group
+named `<model-uuid>-<principal application>-host-metrics` (for example
+`da137c2d-...-polkadot-host-metrics`) on
+`send-remote-write`, alongside any principal rules:
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `HostDiskUsageWarning` | filesystem usage above 80% | `warning` |
+| `HostDiskUsageCritical` | filesystem usage above 90% | `critical` |
+| `HostMemoryUsageWarning` | memory usage above 80% | `warning` |
+| `HostMemoryUsageCritical` | memory usage above 90% | `critical` |
+
+- Usage must stay above the threshold for `5m` before an alert fires.
+- Disk usage is `1 - avail / size` for every mounted filesystem except
+  `tmpfs`, `devtmpfs`, `overlay`, `squashfs`, `iso9660`, and `ramfs`; one alert
+  per unit and mountpoint. Memory usage is `1 - MemAvailable / MemTotal`.
+- The rules match `juju_model_uuid` and the `juju_application` of the
+  principal the leader is attached to, so each alloy-sub application alerts
+  only on the hosts it scrapes and two applications in one model never
+  evaluate the same host twice. An alloy-sub application attached to several
+  principals alarms only the leader's principal. Alerts carry the series'
+  Juju topology labels; the rule adds only `severity`. The model UUID in the
+  group name keeps it unique when several models feed one Mimir ruler
+  namespace, which rejects duplicate group names. Deploy one alloy-sub
+  application per principal application: two attached to the same principal
+  would scrape each host twice and publish the same group name.
+- Warning and critical both fire above 90%. Silence the warning with an
+  Alertmanager inhibition rule if you only want one notification.
+- Rules travel only on `send-remote-write`; Grafana Cloud forwarding via
+  `grafana-cloud-config` carries metrics but not alert rules.
+- Setting `enable-host-metrics=false` withdraws the group.
 
 ## Validation Flow
 

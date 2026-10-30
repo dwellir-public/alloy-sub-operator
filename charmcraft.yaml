@@ -84,7 +84,9 @@ config:
         (prometheus.exporter.unix). No process is installed on the machine and no
         port is opened; the exporter runs inside Alloy and its metrics are
         forwarded over remote write, carrying the principal's Juju topology
-        labels. This job scrapes every 15s regardless of global_scrape_interval.
+        labels. This job scrapes every 60s regardless of global_scrape_interval.
+        When enabled, the leader also publishes host disk and memory usage alert
+        rules (80% warning, 90% critical) over send-remote-write.
         Default collectors emit roughly a thousand series per host, so leave this
         off where remote write volume is a concern.
       type: boolean

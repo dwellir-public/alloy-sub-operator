@@ -30,6 +30,7 @@ def test_charmcraft_declares_the_host_metrics_option():
 
     assert "enable-host-metrics:" in charmcraft
     assert "type: boolean" in charmcraft
+    assert "80% warning, 90% critical" in charmcraft
 
 
 def test_readme_documents_host_metrics():
@@ -37,6 +38,9 @@ def test_readme_documents_host_metrics():
 
     assert "## Host metrics" in readme
     assert "enable-host-metrics=true" in readme
+    assert "HostDiskUsageWarning" in readme
+    assert "HostMemoryUsageCritical" in readme
+    assert "send-remote-write" in readme.split("## Host metrics")[1].split("## Validation Flow")[0]
 
 
 def test_charmcraft_declares_empty_log_files_option():

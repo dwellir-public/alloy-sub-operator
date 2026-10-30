@@ -25,7 +25,13 @@ from charms.dwellir_observability.v0.machine_observability import (
     load_machine_observability_payload,
 )
 
-from src.charm import AlloySubCharm, PayloadDecodeError, parse_machine_observability_payload_json
+from src.charm import (
+    RULE_PUBLICATION_VALUE_LIMIT,
+    AlloySubCharm,
+    PayloadDecodeError,
+    parse_machine_observability_payload_json,
+)
+from src.host_alert_rules import build_host_alert_rule_groups
 from src.principal_context import PrincipalContext
 
 
@@ -1347,6 +1353,56 @@ def test_duplicate_final_group_name_makes_candidate_unpublishable():
     }
 
     assert not AlloySubCharm._rule_state_is_publishable(relation_state)
+
+
+def test_host_alert_group_is_appended_after_principal_groups(monkeypatch):
+    import src.charm as charm_module
+
+    monkeypatch.setattr(charm_module.AlloySubCharm, "_configure", lambda *args, **kwargs: True)
+    harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
+    harness.begin()
+    machine = harness.add_relation("machine-observability", "polkadot")
+    prometheus = harness.add_relation("send-remote-write", "mimir")
+    loki = harness.add_relation("send-loki-logs", "loki")
+    harness.update_relation_data(
+        machine,
+        "polkadot",
+        {"payload": json.dumps(_v3_payload(_rule_artifact("prometheus_alert_rules", "metrics", "Metrics")))},
+    )
+
+    harness.update_config({"enable-host-metrics": True})
+
+    published = json.loads(harness.get_relation_data(prometheus, "alloy-sub")["alert_rules"])["groups"]
+    names = [group["name"] for group in published]
+    assert len(names) == 2
+    assert names[-1] == f"{harness.model.uuid}-polkadot-host-metrics"
+    assert json.loads(harness.get_relation_data(loki, "alloy-sub")["alert_rules"]) == {"groups": []}
+
+
+def test_host_alert_groups_count_toward_publication_size():
+    host_groups = build_host_alert_rule_groups(model_uuid="uuid", principal_application="app")
+
+    def _state(expr):
+        return {
+            0: {
+                "prometheus_alert_rules/one": {
+                    "backend": "prometheus",
+                    "ownership": "uuid/app/prometheus_alert_rules/one",
+                    "groups": [{"name": "one", "rules": [{"alert": "Down", "expr": expr}]}],
+                }
+            }
+        }
+
+    def _payload_bytes(state):
+        groups, _ = AlloySubCharm._flatten_rule_state(state)
+        return len(json.dumps({"groups": groups}, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+    state = _state("x" * (RULE_PUBLICATION_VALUE_LIMIT - _payload_bytes(_state(""))))
+    assert _payload_bytes(state) == RULE_PUBLICATION_VALUE_LIMIT
+
+    assert AlloySubCharm._rule_state_is_publishable(state)
+    assert not AlloySubCharm._rule_state_is_publishable(state, host_groups)
 
 
 @pytest.mark.parametrize(
