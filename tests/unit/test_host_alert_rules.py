@@ -5,12 +5,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
 from alert_rules import validate_rule_groups
+from config_builder import HOST_METRICS_JOB_LABEL
 from host_alert_rules import build_host_alert_rule_groups
 
 MODEL_UUID = "00000000-0000-4000-8000-000000000222"
 # The series carry the principal's topology, so each alloy-sub application alerts only on
 # the hosts of the principal it is attached to; two apps in one model never evaluate twice.
-BASE_MATCHER = f'juju_model_uuid="{MODEL_UUID}",juju_application="polkadot"'
+# The job pins the built-in host pipeline: a principal-declared node-exporter endpoint
+# carries the same topology under its own job name and must not alert a second time.
+# Alloy's exporter framework stamps job="integrations/unix" on the targets and the scrape
+# block's job_name never overrides an existing job label, so that is the value to match.
+BASE_MATCHER = f'job="integrations/unix",juju_model_uuid="{MODEL_UUID}",juju_application="polkadot"'
 DISK_MATCHER = f'{BASE_MATCHER},fstype!~"tmpfs|devtmpfs|overlay|squashfs|iso9660|ramfs"'
 
 
@@ -61,6 +66,12 @@ def test_every_rule_waits_five_minutes_and_carries_only_a_severity_label():
         {"severity": "warning"},
         {"severity": "critical"},
     ]
+
+
+def test_every_selector_is_restricted_to_the_built_in_host_metrics_job():
+    for rule in _rules():
+        expr = rule["expr"]
+        assert expr.count(f'job="{HOST_METRICS_JOB_LABEL}"') == 2, expr
 
 
 def test_rules_do_not_set_topology_labels():

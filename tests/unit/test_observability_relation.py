@@ -1376,7 +1376,9 @@ def test_host_alert_group_is_appended_after_principal_groups(monkeypatch):
     published = json.loads(harness.get_relation_data(prometheus, "alloy-sub")["alert_rules"])["groups"]
     names = [group["name"] for group in published]
     assert len(names) == 2
-    assert names[-1] == f"{harness.model.uuid}-polkadot-host-metrics"
+    # No juju-info here, so the principal comes from the payload's source topology and
+    # the group follows that model UUID, the same one the rendered series are stamped with.
+    assert names[-1] == "principal-uuid-polkadot-host-metrics"
     assert json.loads(harness.get_relation_data(loki, "alloy-sub")["alert_rules"]) == {"groups": []}
 
 

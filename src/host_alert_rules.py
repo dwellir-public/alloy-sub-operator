@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import json
 
+try:
+    from .config_builder import HOST_METRICS_JOB_LABEL
+except ImportError:  # pragma: no cover - charm runtime imports src modules flat
+    from config_builder import HOST_METRICS_JOB_LABEL
+
 HOST_ALERT_GROUP_SUFFIX = "host-metrics"
 HOST_USAGE_WARNING_PERCENT = 80
 HOST_USAGE_CRITICAL_PERCENT = 90
@@ -44,7 +49,14 @@ def build_host_alert_rule_groups(*, model_uuid: str, principal_application: str)
     Matching the principal keeps two alloy-sub applications in one model from
     evaluating the same hosts twice.
     """
-    base_matcher = f"juju_model_uuid={json.dumps(model_uuid)},juju_application={json.dumps(principal_application)}"
+    # The job pins the built-in host pipeline. A principal-declared node-exporter
+    # endpoint carries the same Juju topology under its own job name and would
+    # otherwise raise every alert a second time for the same host.
+    base_matcher = (
+        f"job={json.dumps(HOST_METRICS_JOB_LABEL)},"
+        f"juju_model_uuid={json.dumps(model_uuid)},"
+        f"juju_application={json.dumps(principal_application)}"
+    )
     disk_matcher = f"{base_matcher},fstype!~{json.dumps(HOST_DISK_FSTYPE_EXCLUDE)}"
     disk_usage = (
         f"100 * (1 - node_filesystem_avail_bytes{{{disk_matcher}}} / node_filesystem_size_bytes{{{disk_matcher}}})"

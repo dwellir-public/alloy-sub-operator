@@ -264,10 +264,13 @@ named `<model-uuid>-<principal application>-host-metrics` (for example
 - Disk usage is `1 - avail / size` for every mounted filesystem except
   `tmpfs`, `devtmpfs`, `overlay`, `squashfs`, `iso9660`, and `ramfs`; one alert
   per unit and mountpoint. Memory usage is `1 - MemAvailable / MemTotal`.
-- The rules match `juju_model_uuid` and the `juju_application` of the
-  principal the leader is attached to, so each alloy-sub application alerts
-  only on the hosts it scrapes and two applications in one model never
-  evaluate the same host twice. An alloy-sub application attached to several
+- The rules match `job="integrations/unix"` (the label Alloy's built-in
+  exporter stamps on host-metric series) plus the `juju_model_uuid` and
+  `juju_application` of the principal the
+  leader is attached to, so each alloy-sub application alerts only on the
+  hosts it scrapes, two applications in one model never evaluate the same
+  host twice, and a node-exporter endpoint the principal declares itself is
+  not alerted on a second time. An alloy-sub application attached to several
   principals alarms only the leader's principal. Alerts carry the series'
   Juju topology labels; the rule adds only `severity`. The model UUID in the
   group name keeps it unique when several models feed one Mimir ruler

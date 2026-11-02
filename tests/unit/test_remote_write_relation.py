@@ -70,6 +70,41 @@ def test_enabling_host_metrics_publishes_the_host_alert_group(monkeypatch):
     )
 
 
+def test_host_alert_rules_follow_the_source_topology_model_uuid(monkeypatch):
+    """The series carry the v2 source topology's UUID, so the selectors must match it, not the collector's."""
+    harness, relation_id = _leader_harness(monkeypatch, with_principal=False)
+    machine = harness.add_relation("machine-observability", "polkadot")
+    harness.update_relation_data(
+        machine,
+        "polkadot",
+        {
+            "payload": json.dumps(
+                {
+                    "schema_version": 2,
+                    "charm_name": "polkadot",
+                    "source_topology": {
+                        "model": "principal-model",
+                        "model_uuid": "00000000-0000-4000-8000-000000000999",
+                        "application": "polkadot",
+                        "unit": "polkadot/0",
+                        "charm_name": "polkadot",
+                    },
+                    "systemd_units": [],
+                    "metrics_endpoints": [],
+                    "journal_match_expressions": [],
+                    "log_files": [],
+                }
+            )
+        },
+    )
+
+    harness.update_config({"enable-host-metrics": True})
+
+    assert _published_groups(harness, relation_id) == build_host_alert_rule_groups(
+        model_uuid="00000000-0000-4000-8000-000000000999", principal_application="polkadot"
+    )
+
+
 def test_host_alert_rules_are_not_published_without_a_principal(monkeypatch):
     """Without a principal the rules cannot be scoped, and no host metrics are rendered either."""
     harness, relation_id = _leader_harness(monkeypatch, with_principal=False)

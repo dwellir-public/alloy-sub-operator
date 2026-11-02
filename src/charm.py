@@ -1201,7 +1201,7 @@ class AlloySubCharm(ops.CharmBase):
         if principal_context is None:
             return []
         return build_host_alert_rule_groups(
-            model_uuid=self.model.uuid,
+            model_uuid=principal_context.model_uuid,
             principal_application=principal_context.application,
         )
 

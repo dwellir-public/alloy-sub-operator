@@ -22,6 +22,12 @@ REMOTE_WRITE_COMPONENT_NAME = "metrics"
 
 HOST_METRICS_COMPONENT_NAME = "node"
 HOST_METRICS_JOB_NAME = "node-exporter"
+# Alloy's shared exporter framework puts job="integrations/<exporter>" on every
+# target it emits (internal/component/prometheus/exporter/exporter.go), and
+# prometheus.scrape only applies job_name to targets that have no job label.
+# The host-metric series therefore carry this value, not HOST_METRICS_JOB_NAME,
+# and anything selecting them has to match it.
+HOST_METRICS_JOB_LABEL = "integrations/unix"
 
 # Host metrics are cheap and their value is in the resolution, so this job is
 # pinned here rather than following the charm's global scrape interval.
