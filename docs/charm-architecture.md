@@ -14,6 +14,7 @@ and consumes generic workload source declarations from the principal over
 - forward logs to Loki
 - forward metrics via remote write
 - validate, topology-label, and forward v3 Prometheus and Loki alert rules
+- publish built-in host disk and memory usage alert rules when host metrics are enabled
 
 ## Relation Flows
 
