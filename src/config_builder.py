@@ -8,6 +8,8 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
+from charms.dwellir_observability.v0.pprof_scrape import PROFILE_TYPES
+
 try:
     from .outbound_endpoints import OutboundEndpoint
 except ImportError:
@@ -19,6 +21,7 @@ DEFAULT_PACKAGE_CONFIG_BACKUP_PATH = os.path.join(DEFAULT_CONFIG_DIR, "config.al
 DEFAULT_CONFIG_BACKUP_PATH = os.path.join(DEFAULT_CONFIG_DIR, "config.alloy.bak")
 DEFAULT_SYSTEMD_DEFAULTS_PATH = "/etc/default/alloy"
 REMOTE_WRITE_COMPONENT_NAME = "metrics"
+PYROSCOPE_WRITE_COMPONENT_NAME = "pyroscope"
 
 HOST_METRICS_COMPONENT_NAME = "node"
 HOST_METRICS_JOB_NAME = "node-exporter"
@@ -78,6 +81,19 @@ class FileLogSource:
     attributes: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ProfilingSource:
+    """One Go pprof profiling source scraped by ``pyroscope.scrape``.
+
+    ``labels`` already carries ``instance`` and the Juju topology, merged by the charm.
+    """
+
+    service_name: str
+    targets: list[str]
+    labels: dict[str, str]
+    profile_types: list[str]
+
+
 class ConfigBuilder:
     """Build Alloy config text from relation-driven observability inputs."""
 
@@ -98,6 +114,9 @@ class ConfigBuilder:
         max_elapsed_time_min: int,
         tls_insecure_skip_verify: bool,
         host_metrics: HostMetrics | None = None,
+        profiling_sources: list[ProfilingSource] | None = None,
+        profiling_sink_url: str | None = None,
+        profiles_scrape_interval: str = "15s",
     ):
         self._loki_endpoints = loki_endpoints
         self._remote_write_endpoints = remote_write_endpoints
@@ -113,6 +132,9 @@ class ConfigBuilder:
         self._max_elapsed_time_min = max_elapsed_time_min
         self._tls_insecure_skip_verify = tls_insecure_skip_verify
         self._host_metrics = host_metrics
+        self._profiling_sources = profiling_sources or []
+        self._profiling_sink_url = profiling_sink_url
+        self._profiles_scrape_interval = profiles_scrape_interval
 
     def build(self) -> str:
         """Return the rendered Alloy configuration."""
@@ -131,6 +153,10 @@ class ConfigBuilder:
                 blocks.extend(filelog_sources)
             if self._loki_endpoints:
                 blocks.extend([self._render_loki_writer(), ""])
+        if self._profiling_sources and self._profiling_sink_url:
+            blocks.extend([self._render_pyroscope_write(), ""])
+            for source in self._profiling_sources:
+                blocks.extend([self._render_pyroscope_scrape(source), ""])
         return "\n".join(blocks).rstrip() + "\n"
 
     @staticmethod
@@ -233,6 +259,40 @@ class ConfigBuilder:
                 "}",
             ]
         )
+        return "\n".join(lines)
+
+    def _render_pyroscope_write(self) -> str:
+        return "\n".join(
+            [
+                f'pyroscope.write "{PYROSCOPE_WRITE_COMPONENT_NAME}" {{',
+                "  endpoint {",
+                f"    url = {json.dumps(self._profiling_sink_url)}",
+                "  }",
+                "}",
+            ]
+        )
+
+    def _render_pyroscope_scrape(self, source: ProfilingSource) -> str:
+        component_name = self._sanitize_component_name(f"{source.service_name}_{source.labels.get('juju_unit', '')}")
+        lines = [f'pyroscope.scrape "{component_name}" {{', "  targets = ["]
+        for address in source.targets:
+            target = {"__address__": address, "service_name": source.service_name, **source.labels}
+            pairs = ", ".join(f"{json.dumps(key)} = {json.dumps(target[key])}" for key in sorted(target))
+            lines.append(f"    {{{pairs}}},")
+        lines.extend(
+            [
+                "  ]",
+                f"  forward_to      = [pyroscope.write.{PYROSCOPE_WRITE_COMPONENT_NAME}.receiver]",
+                f"  scrape_interval = {json.dumps(self._profiles_scrape_interval)}",
+                "",
+                "  profiling_config {",
+            ]
+        )
+        enabled = set(source.profile_types)
+        for profile_type in PROFILE_TYPES:
+            flag = "true" if profile_type in enabled else "false"
+            lines.extend([f"    profile.{profile_type} {{", f"      enabled = {flag}", "    }"])
+        lines.extend(["  }", "}"])
         return "\n".join(lines)
 
     def _metrics_forward_to(self) -> str:
