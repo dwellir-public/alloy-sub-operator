@@ -55,6 +55,8 @@ rules.
 - `send-loki-logs`: outbound Loki forwarding
 - `send-remote-write`: outbound metrics forwarding
 - `grafana-cloud-config`: outbound Grafana Cloud endpoints and credentials
+- `profiling-source`: pprof targets the principal publishes (`pprof_scrape`, optional, container scope)
+- `send-profiles`: outbound profile push to Pyroscope (`profiling`, optional, one remote)
 
 Prometheus rules travel on `send-remote-write`; Loki rules travel on
 `send-loki-logs`. Dashboards bypass Alloy and principals publish them directly
@@ -84,6 +86,45 @@ For the shared observability deployment, `send-remote-write` uses the plain
 identity or tenant metadata on that relation. Shared Mimir partitioning is done
 through metric labels such as Juju topology rather than tenant-specific
 remote-write extensions.
+
+## Profiling
+
+`alloy-sub` pulls pprof profiles from the principal and pushes them to Pyroscope.
+
+| Relation | Interface | Notes |
+| --- | --- | --- |
+| `profiling-source` | `pprof_scrape` | optional, `scope: container` |
+| `send-profiles` | `profiling` | optional, `limit: 1` |
+
+```bash
+juju relate alloy-sub:juju-info gotodo
+juju relate gotodo:profiling-source alloy-sub:profiling-source
+juju relate alloy-sub:send-profiles pyroscope-vm:profiling
+```
+
+Iris works unchanged: `juju relate iris:profiling-source alloy-sub:profiling-source`.
+
+- `profiles_scrape_interval` (default `"15s"`) sets how often each profile is
+  pulled. CPU profiles sample for slightly less than this.
+- Targets must be loopback only: `host:port` or `[v6]:port`, port 1-65535.
+- Supported profile types (`PROFILE_TYPES`): `process_cpu`, `memory`,
+  `goroutine`, `mutex`, `block`, `fgprof`, `godeltaprof_memory`,
+  `godeltaprof_mutex`, `godeltaprof_block`.
+- A principal with only `profiling-source` (no `machine-observability`) is a
+  valid pipeline; status reads "...; profiles only".
+- Profiling sources without `send-profiles` render nothing and only log.
+- Payload labels `service_name`, `instance` and `__*` are ignored.
+  `instance` is the principal unit name, and Juju topology from `juju-info`
+  wins over payload labels.
+
+`send-profiles` expects Pyroscope's own `profiling` endpoint (for example
+`pyroscope-vm:profiling`). `alloy-sub` pushes Pyroscope's native format to the
+advertised `host:port`; the field is named `otlp_grpc`, but Pyroscope serves
+native ingest on the same HTTP listener.
+
+`opentelemetry-collector:receive-profiles` does not work. It is an OTLP-only
+receiver, and the collector charm's otelcol v0.130.0 profile layout is rejected
+by Pyroscope 1.21.0 with HTTP 400 `wrong wireType`.
 
 ## Grafana Cloud Integrator
 

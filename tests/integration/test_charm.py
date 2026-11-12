@@ -2,8 +2,10 @@
 # Copyright 2025 Erik Lönroth
 # See LICENSE file for licensing details.
 
+import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -64,3 +66,55 @@ async def test_build_deploy_and_integrate_with_principal(ops_test: OpsTest):
         "/etc/alloy/config.alloy",
     )
     assert 'prometheus.scrape "polkadot"' in action[1]
+
+
+GOTODO_CHARM_PATH = os.environ.get("GOTODO_CHARM_PATH")
+PYROSCOPE_CHARM_PATH = os.environ.get("PYROSCOPE_CHARM_PATH")
+
+
+@pytest.mark.abort_on_fail
+@pytest.mark.skipif(
+    not (GOTODO_CHARM_PATH and PYROSCOPE_CHARM_PATH),
+    reason="GOTODO_CHARM_PATH and PYROSCOPE_CHARM_PATH not set",
+)
+async def test_profiling_reaches_pyroscope(ops_test: OpsTest):
+    """Profiles pulled from gotodo land in Pyroscope under service_name gotodo."""
+    alloy_sub = await ops_test.build_charm(".")
+
+    await ops_test.model.deploy(GOTODO_CHARM_PATH, application_name="gotodo")
+    await ops_test.model.deploy(alloy_sub, application_name=APP_NAME)
+    await ops_test.model.deploy(PYROSCOPE_CHARM_PATH, application_name="pyroscope-vm")
+
+    await ops_test.model.integrate(f"{APP_NAME}:juju-info", "gotodo:juju-info")
+    await ops_test.model.integrate("gotodo:profiling-source", f"{APP_NAME}:profiling-source")
+    await ops_test.model.integrate(f"{APP_NAME}:send-profiles", "pyroscope-vm:profiling")
+
+    await ops_test.model.wait_for_idle(
+        apps=[APP_NAME, "gotodo", "pyroscope-vm"],
+        status="active",
+        timeout=1500,
+    )
+
+    status = await ops_test.model.get_status()
+    address = status.applications["pyroscope-vm"].units["pyroscope-vm/0"].public_address
+    url = f"http://{address}:4040/querier.v1.QuerierService/LabelValues"
+
+    found = False
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        rc, stdout, _ = await ops_test.run(
+            "curl",
+            "-s",
+            "-XPOST",
+            "-H",
+            "Content-Type: application/json",
+            url,
+            "-d",
+            '{"name":"service_name"}',
+        )
+        if rc == 0 and "gotodo" in stdout:
+            found = True
+            break
+        await asyncio.sleep(10)
+
+    assert found, "service_name gotodo never appeared in Pyroscope"
