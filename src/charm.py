@@ -29,9 +29,11 @@ try:
         PayloadTooLargeError,
         load_machine_observability_payload,
     )
+    from charms.dwellir_observability.v0.pprof_scrape import PprofScrapeRequirer
     from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
         GrafanaCloudConfigRequirer,
     )
+    from charms.pyroscope_coordinator_k8s.v0.profiling import ProfilingEndpointRequirer
 
     from . import alloy
     from .alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
@@ -39,6 +41,7 @@ try:
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
         HostMetrics,
+        ProfilingSource,
         ScrapeTarget,
     )
     from .config_builder import (
@@ -60,9 +63,11 @@ except ImportError:
         PayloadTooLargeError,
         load_machine_observability_payload,
     )
+    from charms.dwellir_observability.v0.pprof_scrape import PprofScrapeRequirer
     from charms.grafana_cloud_integrator.v0.cloud_config_requirer import (
         GrafanaCloudConfigRequirer,
     )
+    from charms.pyroscope_coordinator_k8s.v0.profiling import ProfilingEndpointRequirer
 
     import alloy
     from alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
@@ -70,6 +75,7 @@ except ImportError:
         DEFAULT_CONFIG_PATH,
         ConfigBuilder,
         HostMetrics,
+        ProfilingSource,
         ScrapeTarget,
     )
     from config_builder import (
@@ -244,6 +250,7 @@ class AlloySubCharm(ops.CharmBase):
         super().__init__(framework)
         self._stored.set_default(last_good_config="", last_custom_args="")
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
+        self.pprof_sources = PprofScrapeRequirer(self, relation_name="profiling-source")
         self._rule_validator = CosToolRuleValidator()
 
         self.framework.observe(self.on.install, self._on_install)
@@ -262,6 +269,8 @@ class AlloySubCharm(ops.CharmBase):
             "send-loki-logs",
             "send-remote-write",
             "grafana-cloud-config",
+            "profiling-source",
+            "send-profiles",
         ):
             for event in (
                 "relation_joined",
@@ -271,6 +280,10 @@ class AlloySubCharm(ops.CharmBase):
                 self.framework.observe(getattr(self.on[relation_name], event), self._on_relation_event)
         self.framework.observe(
             self.on["machine-observability"].relation_departed,
+            self._on_relation_event,
+        )
+        self.framework.observe(
+            self.on["profiling-source"].relation_departed,
             self._on_relation_event,
         )
 
@@ -821,7 +834,11 @@ class AlloySubCharm(ops.CharmBase):
             self._reset_config_for_missing_relations()
             self.unit.status = ops.WaitingStatus(self._status_message("config waiting for juju-info relation"))
             return False
-        if not self._has_machine_observability_relation() and not self._has_local_sources():
+        if (
+            not self._has_machine_observability_relation()
+            and not self._has_local_sources()
+            and not self._has_profiling_sources()
+        ):
             # Local host metrics or configured logs can form a pipeline
             # without a workload observability declaration.
             self._reset_config_for_missing_relations()
@@ -851,6 +868,10 @@ class AlloySubCharm(ops.CharmBase):
         )
 
         topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
+        profiling_sources = self._profiling_sources(principal_context)
+        profiling_sink_url = self._profiling_sink_url()
+        if profiling_sources and profiling_sink_url is None:
+            logger.info("profiling sources present but no send-profiles relation; profiles not forwarded")
         builder = ConfigBuilder(
             loki_endpoints=loki_endpoints,
             remote_write_endpoints=remote_write_endpoints,
@@ -873,6 +894,9 @@ class AlloySubCharm(ops.CharmBase):
                 if self._host_metrics_enabled()
                 else None
             ),
+            profiling_sources=profiling_sources,
+            profiling_sink_url=profiling_sink_url,
+            profiles_scrape_interval=self._profiles_scrape_interval(),
         )
         desired_custom_args = self._desired_custom_args()
         previous_custom_args = self._stored.last_custom_args
@@ -913,6 +937,7 @@ class AlloySubCharm(ops.CharmBase):
                     ("host metrics", self._host_metrics_enabled()),
                     ("configured file logs", self._configured_log_files()),
                     ("configured journal logs", self._configured_systemd_service()),
+                    ("profiles", self._has_profiling_sources()),
                 )
                 if enabled
             ]
@@ -945,7 +970,11 @@ class AlloySubCharm(ops.CharmBase):
         missing_relations: list[str] = []
         if principal_context is None:
             missing_relations.append("juju-info relation")
-        if not self._has_machine_observability_relation() and not self._has_local_sources():
+        if (
+            not self._has_machine_observability_relation()
+            and not self._has_local_sources()
+            and not self._has_profiling_sources()
+        ):
             missing_relations.append("machine-observability relation")
         return missing_relations
 
@@ -1139,6 +1168,52 @@ class AlloySubCharm(ops.CharmBase):
     def _has_local_sources(self) -> bool:
         """Return whether config enables telemetry without a declaration relation."""
         return bool(self._host_metrics_enabled() or self._configured_log_files() or self._configured_systemd_service())
+
+    def _has_profiling_sources(self) -> bool:
+        """Return whether the principal publishes any valid pprof source."""
+        return bool(self.pprof_sources.get_sources())
+
+    def _profiling_sources(self, principal_context: PrincipalContext) -> list[ProfilingSource]:
+        """Build profiling sources with trusted Juju topology winning over payload labels."""
+        sources: list[ProfilingSource] = []
+        for source in self.pprof_sources.get_sources():
+            payload_labels = {}
+            for key, value in source.labels.items():
+                if key in ("service_name", "instance") or key.startswith("__"):
+                    logger.debug("Dropping reserved label %r from profiling source %s", key, source.unit_name)
+                    continue
+                payload_labels[key] = value
+            labels = {
+                **payload_labels,
+                **principal_context.juju_labels(charm_name=payload_labels.get("juju_charm")),
+                "instance": principal_context.unit,
+            }
+            sources.append(
+                ProfilingSource(
+                    service_name=source.service_name,
+                    targets=list(source.targets),
+                    labels=labels,
+                    profile_types=list(source.profile_types),
+                )
+            )
+        return sources
+
+    def _profiling_sink_url(self) -> str | None:
+        """Return the Pyroscope push URL from send-profiles, if related.
+
+        The ``otlp_grpc`` field is named for OTLP, but on pyroscope-vm it is the address of
+        Pyroscope's single HTTP listener, which also serves native ingest.
+        """
+        relations = [r for r in self.model.relations.get("send-profiles", []) if r.active]
+        endpoints = ProfilingEndpointRequirer(relations).get_endpoints()
+        if not endpoints:
+            return None
+        endpoint = endpoints[0]
+        return f"{'http' if endpoint.insecure else 'https'}://{endpoint.otlp_grpc}"
+
+    def _profiles_scrape_interval(self) -> str:
+        """Return the pprof pull interval."""
+        return str(self.config.get("profiles_scrape_interval", "15s"))
 
     def _systemd_units(self, payload: MachineObservabilityPayload) -> list[str]:
         """Combine relation and config-selected journal units without duplicates."""

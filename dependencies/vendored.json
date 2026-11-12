@@ -49,5 +49,22 @@
     "upstream_owner_repository": "https://github.com/dwellir-public/alloy-sub-operator",
     "upstream_base_commit": null,
     "modifications": "None: authored here; this repository is the canonical source."
+  },
+  {
+    "path": "lib/charms/pyroscope_coordinator_k8s/v0/profiling.py",
+    "sha256": "c6b673586b12ab7503ae4f465082828845bb7957e5d029f009f4a6f3bde49ab2",
+    "library": {
+      "LIBID": "a04f470b17b64e9abcdb102f5458df55",
+      "LIBAPI": 0,
+      "LIBPATCH": 5
+    },
+    "scope": "runtime",
+    "upstream_path": "lib/charms/pyroscope_coordinator_k8s/v0/profiling.py",
+    "repository": "https://github.com/dwellir-public/pyroscope-vm-operator",
+    "commit": "0a61d8e08f2bbf4461dd2766865c1f9beb8ad01c",
+    "license": "Apache-2.0",
+    "upstream_owner_repository": "https://github.com/canonical/pyroscope-operators",
+    "upstream_base_commit": null,
+    "modifications": "None: exact copy."
   }
 ]

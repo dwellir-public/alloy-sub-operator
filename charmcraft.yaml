@@ -91,6 +91,12 @@ config:
         off where remote write volume is a concern.
       type: boolean
       default: false
+    profiles_scrape_interval:
+      description: |
+        How often Alloy pulls each pprof profile from profiling-source targets.
+        CPU profiles sample for slightly less than this.
+      type: string
+      default: "15s"
     tls_insecure_skip_verify:
       description: |
         Skip TLS verification for rendered scrape jobs when true.
@@ -124,6 +130,19 @@ requires:
   grafana-cloud-config:
     interface: grafana_cloud_config
     optional: true
+  profiling-source:
+    interface: pprof_scrape
+    scope: container
+    optional: true
+    description: pprof targets the principal publishes for Alloy to pull (e.g. iris, gotodo).
+  send-profiles:
+    interface: profiling
+    optional: true
+    limit: 1
+    description: |
+      Pyroscope to push profiles to, using Pyroscope's native ingest on the advertised
+      host:port. Relate to pyroscope-vm:profiling. Not compatible with OTLP-only receivers
+      such as opentelemetry-collector:receive-profiles.
 
 parts:
   cos-tool:
