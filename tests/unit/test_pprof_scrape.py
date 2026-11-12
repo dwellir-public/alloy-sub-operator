@@ -129,3 +129,43 @@ def test_is_loopback_true(target):
 @pytest.mark.parametrize("target", ["0.0.0.0:6060", "10.0.0.5:6060"])
 def test_is_loopback_false(target):
     assert not is_loopback(target)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "127.0.0.1:80@evil.com",
+        "[::1]@evil.com:80",
+        "127.0.0.1:80/x",
+        "127.0.0.1:abc",
+        "localhost.evil.com:1",
+        "127.0.0.1",
+        "::1",
+        "[::1]",
+        "localhost",
+        "127.0.0.1:0",
+        "127.0.0.1:65536",
+        "127.0.0.1:6060?x",
+        "127.0.0.1:6060#x",
+        "127.0.0.1: 6060",
+        "[::1]:6060/x",
+        "",
+    ],
+)
+def test_is_loopback_rejects_malformed_or_hostile(target):
+    assert not is_loopback(target)
+
+
+def test_requirer_skips_source_with_no_valid_profile_types(caplog):
+    with caplog.at_level(logging.WARNING):
+        sources, _ = _requirer_sources(_payload(profile_types=["bogus"]))
+    assert sources == []
+    assert any("profile types" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("raw", ["[]", "null", _payload(labels={"a": ["x"]}), _payload(labels={"a": 1})])
+def test_requirer_skips_non_dict_or_non_string_labels(raw, caplog):
+    with caplog.at_level(logging.WARNING):
+        sources, _ = _requirer_sources(raw)
+    assert sources == []
+    assert any(r.levelno == logging.WARNING for r in caplog.records)

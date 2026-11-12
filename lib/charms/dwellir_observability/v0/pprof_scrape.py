@@ -45,6 +45,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -77,21 +78,26 @@ PROFILE_TYPES: tuple[str, ...] = (
 )
 
 
-def _split_host(target: str) -> str:
-    """Return the host part of a ``host:port`` target, without IPv6 brackets."""
-    target = target.strip()
-    if target.startswith("["):
-        return target[1:].split("]", 1)[0]
-    if target.count(":") == 1:
-        return target.split(":", 1)[0]
-    return target
+_PORT = re.compile(r"\d{1,5}")
+_FORBIDDEN = re.compile(r"[@/?#\s\\]")
 
 
 def is_loopback(target: str) -> bool:
-    """Return True if a ``host:port`` target is on the loopback interface."""
-    host = _split_host(target)
+    """Return True only for a strict ``host:port`` or ``[v6]:port`` loopback target."""
+    if not isinstance(target, str) or _FORBIDDEN.search(target):
+        return False
+    if target.startswith("["):
+        host, sep, port = target[1:].partition("]:")
+        if not sep:
+            return False
+    else:
+        host, sep, port = target.rpartition(":")
+        if not sep or ":" in host:
+            return False
+    if not _PORT.fullmatch(port) or not 1 <= int(port) <= 65535:
+        return False
     if host.lower() == "localhost":
-        return True
+        return not target.startswith("[")
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
@@ -207,6 +213,9 @@ class PprofScrapeRequirer(Object):
             logger.warning("Ignoring %s from %s: no valid loopback targets", RELATION_KEY, unit_name)
             return None
         types = tuple(t for t in payload.profile_types if self._keep_type(t, unit_name))
+        if not types:
+            logger.warning("Ignoring %s from %s: no valid profile types", RELATION_KEY, unit_name)
+            return None
         return PprofSource(payload.service_name, targets, types, dict(payload.labels), unit_name)
 
     @staticmethod
