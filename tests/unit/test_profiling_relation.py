@@ -12,12 +12,12 @@ from ops import testing
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
-from test_charm import _ready_state  # noqa: E402
+from test_charm import _machine_observability_payload, _ready_state  # noqa: E402
 
 from charm import AlloySubCharm
 from config_builder import ProfilingSource
 
-ACTIVE_ONLY_PROFILING = "Alloy service running; config valid; Alloy is running"
+ACTIVE_MACHINE_OBSERVABILITY = "Alloy service running; config valid; Alloy is running"
 
 
 def _payload(**overrides):
@@ -67,6 +67,25 @@ def _sink_relation(*, insecure=True):
     )
 
 
+def _metrics_relations():
+    """Return juju-info, a metrics-bearing machine-observability relation, and a remote-write sink."""
+    relations = []
+    for relation in _ready_state(with_remote_write=True).relations:
+        if relation.endpoint == "machine-observability":
+            relation = testing.SubordinateRelation(
+                "machine-observability",
+                remote_app_name="polkadot",
+                remote_unit_id=0,
+                remote_app_data={
+                    "payload": _machine_observability_payload(
+                        metrics_endpoints=[{"targets": ["localhost:9615"], "path": "/metrics", "scheme": "http"}]
+                    )
+                },
+            )
+        relations.append(relation)
+    return relations
+
+
 def _run(event_factory, state):
     ctx = testing.Context(AlloySubCharm)
     with ExitStack() as stack:
@@ -105,6 +124,14 @@ def test_profiling_only_principal_is_a_valid_pipeline():
     assert source.targets == ["127.0.0.1:6060"]
     assert source.profile_types == ["process_cpu", "memory"]
     assert source.labels["instance"] == "iris/0"
+
+
+def test_profiling_without_send_profiles_status_says_no_sink():
+    state_out, _, _ = _start([_juju_info(), _source_relation()])
+
+    assert state_out.unit_status == testing.ActiveStatus(
+        "Alloy service running; config valid; profiles (no send-profiles) only"
+    )
 
 
 def test_profiling_sink_https_when_not_insecure():
@@ -178,7 +205,45 @@ def test_machine_observability_behaviour_unchanged_without_profiling():
     ctx_state = _ready_state(with_loki=True)
     state_out, builder_cls, _ = _run(lambda ctx: ctx.on.start(), ctx_state)
 
-    assert state_out.unit_status == testing.ActiveStatus(ACTIVE_ONLY_PROFILING)
+    assert state_out.unit_status == testing.ActiveStatus(ACTIVE_MACHINE_OBSERVABILITY)
     kwargs = builder_cls.call_args.kwargs
     assert kwargs["profiling_sources"] == []
     assert kwargs["profiling_sink_url"] is None
+
+
+def test_malformed_send_profiles_does_not_block_metrics():
+    bad_sink = testing.Relation(
+        "send-profiles",
+        remote_app_name="pyroscope-vm",
+        remote_app_data={"otlp_grpc_endpoint_url": "10.0.0.9:4040", "insecure": json.dumps(True)},
+    )
+    state = testing.State(relations=[*_metrics_relations(), _source_relation(), bad_sink])
+    state_out, builder_cls, _ = _run(lambda ctx: ctx.on.start(), state)
+
+    assert state_out.unit_status == testing.ActiveStatus(ACTIVE_MACHINE_OBSERVABILITY)
+    kwargs = builder_cls.call_args.kwargs
+    assert kwargs["profiling_sink_url"] is None
+    assert kwargs["metrics_scrape_jobs"]
+
+
+def test_machine_observability_and_profiling_together():
+    state = testing.State(relations=[*_metrics_relations(), _source_relation(), _sink_relation()])
+    state_out, builder_cls, _ = _run(lambda ctx: ctx.on.start(), state)
+
+    assert state_out.unit_status == testing.ActiveStatus(ACTIVE_MACHINE_OBSERVABILITY)
+    kwargs = builder_cls.call_args.kwargs
+    assert kwargs["metrics_scrape_jobs"]
+    assert kwargs["profiling_sink_url"] == "http://10.0.0.9:4040"
+    (source,) = kwargs["profiling_sources"]
+    assert source.service_name == "iris"
+
+
+def test_invalid_label_keys_are_dropped():
+    payload = _payload(labels={"": "a", 'x" = 1}': "b", "bad-key": "c", "team": "x", "juju_charm": "iris-operator"})
+    _, builder_cls, _ = _start([_juju_info(), _source_relation(payload), _sink_relation()])
+
+    (source,) = builder_cls.call_args.kwargs["profiling_sources"]
+    assert "" not in source.labels
+    assert 'x" = 1}' not in source.labels
+    assert "bad-key" not in source.labels
+    assert source.labels["team"] == "x"

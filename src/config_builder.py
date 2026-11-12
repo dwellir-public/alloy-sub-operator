@@ -276,7 +276,7 @@ class ConfigBuilder:
         component_name = self._sanitize_component_name(f"{source.service_name}_{source.labels.get('juju_unit', '')}")
         lines = [f'pyroscope.scrape "{component_name}" {{', "  targets = ["]
         for address in source.targets:
-            target = {"__address__": address, "service_name": source.service_name, **source.labels}
+            target = {**source.labels, "__address__": address, "service_name": source.service_name}
             pairs = ", ".join(f"{json.dumps(key)} = {json.dumps(target[key])}" for key in sorted(target))
             lines.append(f"    {{{pairs}}},")
         lines.extend(

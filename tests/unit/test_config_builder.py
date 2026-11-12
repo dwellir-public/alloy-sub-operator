@@ -478,3 +478,18 @@ def test_profiles_scrape_interval_is_rendered():
 
     assert 'scrape_interval = "30s"' in config
     assert 'scrape_interval = "15s"' not in config
+
+
+def test_profiling_labels_cannot_override_address_or_service_name():
+    source = ProfilingSource(
+        service_name="gotodo",
+        targets=["127.0.0.1:6060"],
+        labels={"__address__": "169.254.169.254:80", "service_name": "evil", "instance": "gotodo/0"},
+        profile_types=["process_cpu"],
+    )
+    config = _profiling_builder(profiling_sources=[source], profiling_sink_url="http://10.0.0.9:4040").build()
+
+    assert '"__address__" = "127.0.0.1:6060"' in config
+    assert '"service_name" = "gotodo"' in config
+    assert "169.254.169.254" not in config
+    assert "evil" not in config

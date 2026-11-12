@@ -104,8 +104,8 @@ juju relate alloy-sub:send-profiles pyroscope-vm:profiling
 
 Iris works unchanged: `juju relate iris:profiling-source alloy-sub:profiling-source`.
 
-- `profiles_scrape_interval` (default `"15s"`) sets how often each profile is
-  pulled. CPU profiles sample for slightly less than this.
+- `profiles_scrape_interval` (default `"15s"`) sets how often Alloy pulls each
+  pprof profile from profiling-source targets.
 - Targets must be loopback only: `host:port` or `[v6]:port`, port 1-65535.
 - Supported profile types (`PROFILE_TYPES`): `process_cpu`, `memory`,
   `goroutine`, `mutex`, `block`, `fgprof`, `godeltaprof_memory`,

@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
+PROF_APP_NAME = "alloy-sub-prof"
+EXPECTED_PROFILE_TYPE_IDS = (
+    "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+    "memory:alloc_space:bytes:space:bytes",
+    "goroutine:goroutine:count:goroutine:count",
+    "mutex:delay:nanoseconds:contentions:count",
+    "block:delay:nanoseconds:contentions:count",
+)
 POLKADOT_CHARM_PATH = os.environ.get("POLKADOT_CHARM_PATH")
 
 
@@ -82,15 +90,15 @@ async def test_profiling_reaches_pyroscope(ops_test: OpsTest):
     alloy_sub = await ops_test.build_charm(".")
 
     await ops_test.model.deploy(GOTODO_CHARM_PATH, application_name="gotodo")
-    await ops_test.model.deploy(alloy_sub, application_name=APP_NAME)
+    await ops_test.model.deploy(alloy_sub, application_name=PROF_APP_NAME)
     await ops_test.model.deploy(PYROSCOPE_CHARM_PATH, application_name="pyroscope-vm")
 
-    await ops_test.model.integrate(f"{APP_NAME}:juju-info", "gotodo:juju-info")
-    await ops_test.model.integrate("gotodo:profiling-source", f"{APP_NAME}:profiling-source")
-    await ops_test.model.integrate(f"{APP_NAME}:send-profiles", "pyroscope-vm:profiling")
+    await ops_test.model.integrate(f"{PROF_APP_NAME}:juju-info", "gotodo:juju-info")
+    await ops_test.model.integrate("gotodo:profiling-source", f"{PROF_APP_NAME}:profiling-source")
+    await ops_test.model.integrate(f"{PROF_APP_NAME}:send-profiles", "pyroscope-vm:profiling")
 
     await ops_test.model.wait_for_idle(
-        apps=[APP_NAME, "gotodo", "pyroscope-vm"],
+        apps=[PROF_APP_NAME, "gotodo", "pyroscope-vm"],
         status="active",
         timeout=1500,
     )
@@ -118,3 +126,17 @@ async def test_profiling_reaches_pyroscope(ops_test: OpsTest):
         await asyncio.sleep(10)
 
     assert found, "service_name gotodo never appeared in Pyroscope"
+
+    types_url = f"http://{address}:4040/querier.v1.QuerierService/ProfileTypes"
+    missing = set(EXPECTED_PROFILE_TYPE_IDS)
+    deadline = time.monotonic() + 180
+    while missing and time.monotonic() < deadline:
+        rc, stdout, _ = await ops_test.run(
+            "curl", "-s", "-XPOST", "-H", "Content-Type: application/json", types_url, "-d", "{}"
+        )
+        if rc == 0:
+            missing = {type_id for type_id in missing if type_id not in stdout}
+        if missing:
+            await asyncio.sleep(10)
+
+    assert not missing, f"profile types never appeared in Pyroscope: {sorted(missing)}"

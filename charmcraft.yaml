@@ -94,7 +94,6 @@ config:
     profiles_scrape_interval:
       description: |
         How often Alloy pulls each pprof profile from profiling-source targets.
-        CPU profiles sample for slightly less than this.
       type: string
       default: "15s"
     tls_insecure_skip_verify:

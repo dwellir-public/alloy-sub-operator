@@ -125,6 +125,7 @@ def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPaylo
 
 
 logger = logging.getLogger(__name__)
+_LABEL_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 RULE_CACHE_KEY = "_alloy_sub_rule_state_v1"
 RULE_CACHE_VALUE_LIMIT = 60 * 1024
@@ -931,13 +932,14 @@ class AlloySubCharm(ops.CharmBase):
     def _active_message(self, default: str) -> str:
         """Return the active-status message for the currently rendered config."""
         if not self._has_machine_observability_relation():
+            profiles_label = "profiles" if self._profiling_sink_url() else "profiles (no send-profiles)"
             sources = [
                 name
                 for name, enabled in (
                     ("host metrics", self._host_metrics_enabled()),
                     ("configured file logs", self._configured_log_files()),
                     ("configured journal logs", self._configured_systemd_service()),
-                    ("profiles", self._has_profiling_sources()),
+                    (profiles_label, self._has_profiling_sources()),
                 )
                 if enabled
             ]
@@ -1182,6 +1184,9 @@ class AlloySubCharm(ops.CharmBase):
                 if key in ("service_name", "instance") or key.startswith("__"):
                     logger.debug("Dropping reserved label %r from profiling source %s", key, source.unit_name)
                     continue
+                if not _LABEL_KEY_RE.fullmatch(key):
+                    logger.warning("Dropping invalid label key %r from profiling source %s", key, source.unit_name)
+                    continue
                 payload_labels[key] = value
             labels = {
                 **payload_labels,
@@ -1205,7 +1210,11 @@ class AlloySubCharm(ops.CharmBase):
         Pyroscope's single HTTP listener, which also serves native ingest.
         """
         relations = [r for r in self.model.relations.get("send-profiles", []) if r.active]
-        endpoints = ProfilingEndpointRequirer(relations).get_endpoints()
+        try:
+            endpoints = ProfilingEndpointRequirer(relations).get_endpoints()
+        except ValueError as e:
+            logger.warning("Ignoring malformed send-profiles relation data: %s", e)
+            return None
         if not endpoints:
             return None
         endpoint = endpoints[0]
