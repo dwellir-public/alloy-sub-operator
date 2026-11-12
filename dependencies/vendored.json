@@ -32,5 +32,22 @@
     "upstream_owner_repository": "https://github.com/canonical/grafana-cloud-integrator",
     "upstream_base_commit": null,
     "modifications": "Downstream implementation retains Canonical LIBID/API/PATCH but no exact Canonical base found. Removes relation-data credential logging from initial downstream import 13c9429e4c100a4bcaa27f86350e415bdad0b12e."
+  },
+  {
+    "path": "lib/charms/dwellir_observability/v0/pprof_scrape.py",
+    "sha256": "df8251ed61162b4b5319b8cd41d96ed4fc4849c31a14e4114878f5e7851150be",
+    "library": {
+      "LIBID": "c4f8b2a6d1e94a3f9b7e5d20a8c61f43",
+      "LIBAPI": 0,
+      "LIBPATCH": 1
+    },
+    "scope": "runtime",
+    "upstream_path": "lib/charms/dwellir_observability/v0/pprof_scrape.py",
+    "repository": "https://github.com/dwellir-public/alloy-sub-operator",
+    "commit": "afc7a81f7a30f60c527dd0ae8a9d029703f11fe7",
+    "license": "Apache-2.0",
+    "upstream_owner_repository": "https://github.com/dwellir-public/alloy-sub-operator",
+    "upstream_base_commit": null,
+    "modifications": "None: authored here; this repository is the canonical source."
   }
 ]
