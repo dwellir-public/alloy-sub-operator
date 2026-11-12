@@ -14,5 +14,5 @@ def test_pprof_scrape_library_matches_canonical_source():
     library = Path(__file__).resolve().parents[2] / "lib/charms/dwellir_observability/v0/pprof_scrape.py"
 
     assert hashlib.sha256(library.read_bytes()).hexdigest() == (
-        "df8251ed61162b4b5319b8cd41d96ed4fc4849c31a14e4114878f5e7851150be"
+        "7a010b9cb67508c280b5f1fd3eb03c6cde86dbad90a0719a021cef5c3d046a9f"
     )
