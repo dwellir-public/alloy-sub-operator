@@ -98,11 +98,9 @@ remote-write extensions.
 
 ```bash
 juju relate alloy-sub:juju-info gotodo
-juju relate gotodo:profiling-source alloy-sub:profiling-source
+juju relate application:profiling-source alloy-sub:profiling-source
 juju relate alloy-sub:send-profiles pyroscope-vm:profiling
 ```
-
-Iris works unchanged: `juju relate iris:profiling-source alloy-sub:profiling-source`.
 
 - `profiles_scrape_interval` (default `"15s"`) sets how often Alloy pulls each
   pprof profile from profiling-source targets.
