@@ -44,7 +44,7 @@
     "scope": "runtime",
     "upstream_path": "lib/charms/dwellir_observability/v0/pprof_scrape.py",
     "repository": "https://github.com/dwellir-public/alloy-sub-operator",
-    "commit": "d1ab43192d4a45a224e838e88f6bfd0533dd0a7f",
+    "commit": "fa2d7a140b924b82705ce9e841ba47d5d9d3514a",
     "license": "Apache-2.0",
     "upstream_owner_repository": "https://github.com/dwellir-public/alloy-sub-operator",
     "upstream_base_commit": null,
