@@ -44,7 +44,7 @@ def _provider_data(source):
     return state.get_relation(relation.id).local_unit_data
 
 
-def test_provider_publishes_iris_compatible_payload():
+def test_provider_publishes_expected_payload():
     data = _provider_data(PprofSource("gotodo", ("127.0.0.1:6060",), ("process_cpu", "goroutine")))
     payload = json.loads(data["profiling_source"])
     assert set(payload["labels"]) == {"juju_model", "juju_model_uuid", "juju_application", "juju_unit", "juju_charm"}
@@ -74,29 +74,29 @@ def _requirer_sources(raw):
 def _payload(**overrides):
     base = {
         "version": 1,
-        "service_name": "iris",
+        "service_name": "my-app",
         "targets": ["127.0.0.1:6060"],
         "profile_types": ["process_cpu", "memory", "goroutine"],
         "labels": {
             "juju_model": "m",
             "juju_model_uuid": "u",
-            "juju_application": "iris",
-            "juju_unit": "iris/0",
-            "juju_charm": "iris-operator",
+            "juju_application": "my-app",
+            "juju_unit": "my-app/0",
+            "juju_charm": "my-app-operator",
         },
     }
     base.update(overrides)
     return json.dumps(base)
 
 
-def test_requirer_decodes_iris_literal_payload():
+def test_requirer_decodes_literal_payload():
     sources, _ = _requirer_sources(_payload())
     assert len(sources) == 1
     source = sources[0]
-    assert source.service_name == "iris"
+    assert source.service_name == "my-app"
     assert source.targets == ("127.0.0.1:6060",)
     assert source.profile_types == ("process_cpu", "memory", "goroutine")
-    assert source.labels["juju_unit"] == "iris/0"
+    assert source.labels["juju_unit"] == "my-app/0"
     assert source.unit_name.endswith("/0")
 
 

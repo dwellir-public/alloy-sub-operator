@@ -1364,11 +1364,11 @@ def test_log_files_rejects_relative_paths_without_writing_config():
 
 def test_configured_systemd_service_collects_journal_alongside_host_metrics_without_relation():
     state = _configured_log_files_state("", with_machine_observability=False)
-    state.config.update({"enable-host-metrics": True, "systemd-service": " iris.service "})
+    state.config.update({"enable-host-metrics": True, "systemd-service": " my-app.service "})
     state_out, config = _run_and_capture_config(state, event_name="config_changed")
     assert 'prometheus.exporter.unix "node"' in config
-    assert 'matches = "_SYSTEMD_UNIT=iris.service"' in config
-    assert 'systemd_unit = "iris.service"' in config
+    assert 'matches = "_SYSTEMD_UNIT=my-app.service"' in config
+    assert 'systemd_unit = "my-app.service"' in config
     assert 'loki.write "main"' in config
     assert f'url = "{LOKI_URL}"' in config
     assert state_out.unit_status == testing.ActiveStatus(
@@ -1378,16 +1378,16 @@ def test_configured_systemd_service_collects_journal_alongside_host_metrics_with
 
 def test_configured_systemd_service_collects_without_host_metrics_or_observability_relation():
     state = _configured_log_files_state("", with_machine_observability=False)
-    state.config["systemd-service"] = "iris.service"
+    state.config["systemd-service"] = "my-app.service"
     state_out, config = _run_and_capture_config(state, event_name="config_changed")
-    assert 'matches = "_SYSTEMD_UNIT=iris.service"' in config
+    assert 'matches = "_SYSTEMD_UNIT=my-app.service"' in config
     assert "prometheus.exporter.unix" not in config
     assert state_out.unit_status == testing.ActiveStatus(
         "Alloy service running; config valid; configured journal logs only"
     )
 
 
-@pytest.mark.parametrize("configured_service", ["iris.service", "principal.service"])
+@pytest.mark.parametrize("configured_service", ["my-app.service", "principal.service"])
 def test_configured_systemd_service_is_additive_and_deduplicates_relation_services(configured_service):
     state = _configured_log_files_state(
         "/tmp/custom.log",
@@ -1406,19 +1406,19 @@ def test_configured_systemd_service_is_additive_and_deduplicates_relation_servic
 
 def test_clearing_systemd_service_preserves_relation_journal_and_host_metrics():
     state = _configured_log_files_state("", payload=_machine_observability_payload(systemd_units=["principal.service"]))
-    state.config.update({"enable-host-metrics": True, "systemd-service": "iris.service"})
+    state.config.update({"enable-host-metrics": True, "systemd-service": "my-app.service"})
     state_out, config = _run_and_capture_config(state, event_name="config_changed")
-    assert "_SYSTEMD_UNIT=iris.service" in config
+    assert "_SYSTEMD_UNIT=my-app.service" in config
     state_out.config["systemd-service"] = ""
     _, cleared_config = _run_and_capture_config(state_out, event_name="config_changed")
-    assert "_SYSTEMD_UNIT=iris.service" not in cleared_config
+    assert "_SYSTEMD_UNIT=my-app.service" not in cleared_config
     assert "_SYSTEMD_UNIT=principal.service" in cleared_config
     assert 'prometheus.exporter.unix "node"' in cleared_config
 
 
 def test_clearing_configured_systemd_service_without_relation_keeps_metrics_only():
     state = _configured_log_files_state("", with_machine_observability=False)
-    state.config.update({"enable-host-metrics": True, "systemd-service": "iris.service"})
+    state.config.update({"enable-host-metrics": True, "systemd-service": "my-app.service"})
     state_out, config = _run_and_capture_config(state, event_name="config_changed")
     assert "loki.source.journal" in config
     state_out.config["systemd-service"] = ""

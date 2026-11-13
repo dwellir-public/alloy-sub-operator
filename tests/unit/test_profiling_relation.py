@@ -23,15 +23,15 @@ ACTIVE_MACHINE_OBSERVABILITY = "Alloy service running; config valid; Alloy is ru
 def _payload(**overrides):
     base = {
         "version": 1,
-        "service_name": "iris",
+        "service_name": "my-app",
         "targets": ["127.0.0.1:6060"],
         "profile_types": ["process_cpu", "memory"],
         "labels": {
             "juju_model": "m",
             "juju_model_uuid": "u",
-            "juju_application": "iris",
-            "juju_unit": "iris/0",
-            "juju_charm": "iris-operator",
+            "juju_application": "my-app",
+            "juju_unit": "my-app/0",
+            "juju_charm": "my-app-operator",
         },
     }
     base.update(overrides)
@@ -41,7 +41,7 @@ def _payload(**overrides):
 def _juju_info():
     return testing.SubordinateRelation(
         "juju-info",
-        remote_app_name="iris",
+        remote_app_name="my-app",
         remote_unit_id=0,
         remote_unit_data={"private-address": "10.0.0.5"},
     )
@@ -50,7 +50,7 @@ def _juju_info():
 def _source_relation(payload=None):
     return testing.SubordinateRelation(
         "profiling-source",
-        remote_app_name="iris",
+        remote_app_name="my-app",
         remote_unit_id=0,
         remote_unit_data={"profiling_source": payload or _payload()},
     )
@@ -120,10 +120,10 @@ def test_profiling_only_principal_is_a_valid_pipeline():
     assert kwargs["profiling_sink_url"] == "http://10.0.0.9:4040"
     (source,) = kwargs["profiling_sources"]
     assert isinstance(source, ProfilingSource)
-    assert source.service_name == "iris"
+    assert source.service_name == "my-app"
     assert source.targets == ["127.0.0.1:6060"]
     assert source.profile_types == ["process_cpu", "memory"]
-    assert source.labels["instance"] == "iris/0"
+    assert source.labels["instance"] == "my-app/0"
 
 
 def test_profiling_without_send_profiles_status_says_no_sink():
@@ -151,15 +151,15 @@ def test_profiling_without_send_profiles_renders_no_sink(caplog):
 
 def test_juju_info_topology_overrides_payload_labels():
     payload = _payload(
-        labels={"juju_application": "spoofed", "juju_unit": "spoofed/9", "team": "x", "juju_charm": "iris-operator"}
+        labels={"juju_application": "spoofed", "juju_unit": "spoofed/9", "team": "x", "juju_charm": "my-app-operator"}
     )
     _, builder_cls, _ = _start([_juju_info(), _source_relation(payload), _sink_relation()])
 
     (source,) = builder_cls.call_args.kwargs["profiling_sources"]
-    assert source.labels["juju_application"] == "iris"
-    assert source.labels["juju_unit"] == "iris/0"
+    assert source.labels["juju_application"] == "my-app"
+    assert source.labels["juju_unit"] == "my-app/0"
     assert source.labels["team"] == "x"
-    assert source.labels["juju_charm"] == "iris-operator"
+    assert source.labels["juju_charm"] == "my-app-operator"
 
 
 def test_payload_cannot_override_reserved_labels():
@@ -175,11 +175,11 @@ def test_payload_cannot_override_reserved_labels():
     _, builder_cls, _ = _start([_juju_info(), _source_relation(payload), _sink_relation()])
 
     (source,) = builder_cls.call_args.kwargs["profiling_sources"]
-    assert source.labels["instance"] == "iris/0"
+    assert source.labels["instance"] == "my-app/0"
     assert "service_name" not in source.labels
     assert not [key for key in source.labels if key.startswith("__")]
     assert source.labels["team"] == "x"
-    assert source.service_name == "iris"
+    assert source.service_name == "my-app"
 
 
 def test_send_profiles_broken_removes_pyroscope_blocks():
@@ -235,11 +235,11 @@ def test_machine_observability_and_profiling_together():
     assert kwargs["metrics_scrape_jobs"]
     assert kwargs["profiling_sink_url"] == "http://10.0.0.9:4040"
     (source,) = kwargs["profiling_sources"]
-    assert source.service_name == "iris"
+    assert source.service_name == "my-app"
 
 
 def test_invalid_label_keys_are_dropped():
-    payload = _payload(labels={"": "a", 'x" = 1}': "b", "bad-key": "c", "team": "x", "juju_charm": "iris-operator"})
+    payload = _payload(labels={"": "a", 'x" = 1}': "b", "bad-key": "c", "team": "x", "juju_charm": "my-app-operator"})
     _, builder_cls, _ = _start([_juju_info(), _source_relation(payload), _sink_relation()])
 
     (source,) = builder_cls.call_args.kwargs["profiling_sources"]

@@ -448,7 +448,7 @@ def test_build_renders_pyroscope_write_and_scrape():
 
 def test_build_renders_one_scrape_per_source():
     config = _profiling_builder(
-        profiling_sources=[_gotodo_source(), _gotodo_source(unit="iris/0", name="iris")],
+        profiling_sources=[_gotodo_source(), _gotodo_source(unit="my-app/0", name="my-app")],
         profiling_sink_url="http://10.0.0.9:4040",
     ).build()
 

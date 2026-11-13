@@ -5,10 +5,9 @@
 
 Principal charms publish the loopback address of a pprof listener on every
 unit; a machine-local collector (for example a subordinate Alloy feeding
-Pyroscope) reads the declarations and scrapes them. The wire format is the
-one iris-operator already publishes: the unit data key ``profiling_source``
-holds JSON ``{"version": 1, "service_name", "targets", "profile_types",
-"labels"}``.
+Pyroscope) reads the declarations and scrapes them. In the wire format, the
+unit data key ``profiling_source`` holds JSON ``{"version": 1,
+"service_name", "targets", "profile_types", "labels"}``.
 
 Canonical source lives in alloy-sub-operator; vendor-copy into principals.
 

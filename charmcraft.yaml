@@ -25,7 +25,7 @@ config:
     systemd-service:
       description: |
         Exact systemd unit name to collect from the principal machine's journal,
-        for example iris.service. An empty value adds no journal source.
+        for example my-app.service. An empty value adds no journal source.
         This unit is collected alongside systemd_units declared through the
         machine-observability relation; duplicate unit names are collected once.
         Collection works with only a juju-info attachment and can coexist with
@@ -133,7 +133,7 @@ requires:
     interface: pprof_scrape
     scope: container
     optional: true
-    description: pprof targets the principal publishes for Alloy to pull (e.g. iris, gotodo).
+    description: pprof targets the principal publishes for Alloy to pull.
   send-profiles:
     interface: profiling
     optional: true

@@ -35,7 +35,7 @@
   },
   {
     "path": "lib/charms/dwellir_observability/v0/pprof_scrape.py",
-    "sha256": "7a010b9cb67508c280b5f1fd3eb03c6cde86dbad90a0719a021cef5c3d046a9f",
+    "sha256": "eb03e0c3fd8b19711d1df0c099117dcf77211e53b96181dbdaab3755bde07baf",
     "library": {
       "LIBID": "c4f8b2a6d1e94a3f9b7e5d20a8c61f43",
       "LIBAPI": 0,

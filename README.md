@@ -210,7 +210,7 @@ Expected result:
 Set `systemd-service` to collect a systemd unit's journal on the principal machine:
 
 ```bash
-juju config alloy-sub systemd-service=iris.service
+juju config alloy-sub systemd-service=my-app.service
 ```
 
 The default is empty. The configured unit is collected alongside `systemd_units`
