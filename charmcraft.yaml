@@ -93,7 +93,10 @@ config:
       default: false
     profiles_scrape_interval:
       description: |
-        How often Alloy pulls each pprof profile from profiling-source targets.
+        How often Alloy pulls each pprof profile from profiling-source targets,
+        as a Go duration (for example 10s or 1m). When process_cpu or fgprof is
+        enabled, CPU is captured for the interval minus 1s, so the interval must
+        be longer than 2s.
       type: string
       default: "15s"
     tls_insecure_skip_verify:

@@ -17,6 +17,18 @@ charmcraft pack
 CHARM_PATH=/path/to/alloy-sub.charm uv run pytest tests/integration -v
 ```
 
+`tests/integration/test_alloy_runtime.py` runs rendered profiling config under a
+real `alloy run`, which catches errors `alloy fmt` does not, such as
+`delta_profiling_duration` rejections. It needs no Juju model, only an Alloy
+binary (skipped otherwise):
+
+```bash
+curl -sSfL -o alloy.zip https://github.com/grafana/alloy/releases/download/v1.21.3/alloy-linux-amd64.zip
+echo "50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d  alloy.zip" | sha256sum -c -
+unzip -q alloy.zip && chmod +x alloy-linux-amd64
+ALLOY_BINARY=$PWD/alloy-linux-amd64 uv run pytest tests/integration/test_alloy_runtime.py -v
+```
+
 For a compatibility check, refresh the same built artifact into a disposable
 model and verify both:
 

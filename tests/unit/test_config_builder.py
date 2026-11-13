@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
+import pytest
 from charms.dwellir_observability.v0.pprof_scrape import PROFILE_TYPES
 
 from src.config_builder import (
@@ -14,6 +15,7 @@ from src.config_builder import (
     MetricsScrapeJob,
     ProfilingSource,
     ScrapeTarget,
+    parse_go_duration,
 )
 from src.outbound_endpoints import OutboundEndpoint
 
@@ -478,6 +480,83 @@ def test_profiles_scrape_interval_is_rendered():
 
     assert 'scrape_interval = "30s"' in config
     assert 'scrape_interval = "15s"' not in config
+
+
+@pytest.mark.parametrize(
+    ("interval", "duration"),
+    [
+        ("15s", "14s"),
+        ("10s", "9s"),
+        ("3s", "2s"),
+        ("2500ms", "1500ms"),
+        ("1m", "59s"),
+        ("1m30s", "89s"),
+        ("1.5m", "89s"),
+    ],
+)
+@pytest.mark.parametrize("delta_type", ["process_cpu", "fgprof"])
+def test_delta_profiling_duration_tracks_scrape_interval(interval, duration, delta_type):
+    """Alloy rejects delta_profiling_duration > scrape_interval - 1s at runtime, not in `alloy fmt`."""
+    config = _profiling_builder(
+        profiling_sources=[_gotodo_source(types=(delta_type, "goroutine"))],
+        profiling_sink_url="http://10.0.0.9:4040",
+        profiles_scrape_interval=interval,
+    ).build()
+
+    assert f'  delta_profiling_duration = "{duration}"' in config
+    _assert_alloy_delta_rules(interval, duration)
+
+
+def _assert_alloy_delta_rules(interval: str, duration: str) -> None:
+    """Mirror pyroscope.scrape Arguments.Validate in Alloy v1.21.3 for delta targets."""
+    interval_ns = parse_go_duration(interval)
+    duration_ns = parse_go_duration(duration)
+    assert interval_ns >= 2 * 10**9
+    assert duration_ns > 10**9
+    assert duration_ns <= interval_ns - 10**9
+
+
+def test_delta_profiling_duration_omitted_without_delta_types():
+    config = _profiling_builder(
+        profiling_sources=[_gotodo_source(types=("goroutine", "godeltaprof_memory"))],
+        profiling_sink_url="http://10.0.0.9:4040",
+        profiles_scrape_interval="2s",
+    ).build()
+
+    assert "delta_profiling_duration" not in config
+    assert 'scrape_interval = "2s"' in config
+
+
+@pytest.mark.parametrize("interval", ["2s", "1500ms", "1s"])
+def test_too_short_interval_with_delta_types_is_rejected(interval):
+    builder = _profiling_builder(
+        profiling_sources=[_gotodo_source(types=("process_cpu",))],
+        profiling_sink_url="http://10.0.0.9:4040",
+        profiles_scrape_interval=interval,
+    )
+
+    with pytest.raises(ValueError, match="must be longer than 2s"):
+        builder.build()
+
+
+@pytest.mark.parametrize("interval", ["", "10", "ten seconds", "10x", "-10s", "s"])
+def test_unparseable_interval_with_delta_types_is_rejected(interval):
+    builder = _profiling_builder(
+        profiling_sources=[_gotodo_source(types=("process_cpu",))],
+        profiling_sink_url="http://10.0.0.9:4040",
+        profiles_scrape_interval=interval,
+    )
+
+    with pytest.raises(ValueError, match="invalid duration"):
+        builder.build()
+
+
+@pytest.mark.parametrize(
+    ("text", "nanoseconds"),
+    [("0", 0), ("15s", 15 * 10**9), ("1h2m3s", 3723 * 10**9), ("250ms", 250 * 10**6), ("1.5s", 1500 * 10**6)],
+)
+def test_parse_go_duration(text, nanoseconds):
+    assert parse_go_duration(text) == nanoseconds
 
 
 def test_profiling_labels_cannot_override_address_or_service_name():

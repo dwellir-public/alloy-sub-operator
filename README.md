@@ -103,7 +103,11 @@ juju relate alloy-sub:send-profiles pyroscope-vm:profiling
 ```
 
 - `profiles_scrape_interval` (default `"15s"`) sets how often Alloy pulls each
-  pprof profile from profiling-source targets.
+  pprof profile from profiling-source targets. It takes a Go duration such as
+  `10s` or `1m`. When a source enables a delta profile type (`process_cpu` or
+  `fgprof`), the charm renders `delta_profiling_duration` as the interval minus
+  1s, so the CPU capture fills the interval. In that case the interval must be
+  longer than 2s; shorter values block the unit with `config invalid`.
 - Targets must be loopback only: `host:port` or `[v6]:port`, port 1-65535.
 - Supported profile types (`PROFILE_TYPES`): `process_cpu`, `memory`,
   `goroutine`, `mutex`, `block`, `fgprof`, `godeltaprof_memory`,

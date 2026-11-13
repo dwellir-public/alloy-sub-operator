@@ -36,6 +36,54 @@ HOST_METRICS_JOB_LABEL = "integrations/unix"
 # pinned here rather than following the charm's global scrape interval.
 HOST_METRICS_SCRAPE_INTERVAL = "60s"
 
+# pyroscope.scrape profile types that Alloy collects as a timed delta capture
+# (``Delta: true`` in internal/component/pyroscope/scrape/scrape.go). When any
+# of these is enabled Alloy requires 1s < delta_profiling_duration <=
+# scrape_interval - 1s, but the duration defaults to a fixed 14s, so any
+# scrape_interval below 15s fails at component evaluation, not in `alloy fmt`.
+DELTA_PROFILE_TYPES = frozenset({"process_cpu", "fgprof"})
+
+_GO_DURATION_UNITS_NS = {
+    "ns": 1,
+    "us": 1_000,
+    "µs": 1_000,
+    "μs": 1_000,
+    "ms": 1_000_000,
+    "s": 1_000_000_000,
+    "m": 60 * 1_000_000_000,
+    "h": 3600 * 1_000_000_000,
+}
+_GO_DURATION_PART = re.compile(r"(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)")
+_NS_PER_MS = 1_000_000
+_NS_PER_S = 1_000_000_000
+
+
+def parse_go_duration(value: str) -> int:
+    """Parse a non-negative Go duration string (as Alloy accepts) into nanoseconds."""
+    text = value.strip()
+    if text == "0":
+        return 0
+    position = 0
+    total = 0.0
+    while position < len(text):
+        match = _GO_DURATION_PART.match(text, position)
+        if match is None:
+            raise ValueError(f"invalid duration {value!r}")
+        total += float(match.group(1)) * _GO_DURATION_UNITS_NS[match.group(2)]
+        position = match.end()
+    if position == 0:
+        raise ValueError(f"invalid duration {value!r}")
+    return round(total)
+
+
+def format_go_duration(nanoseconds: int) -> str:
+    """Render nanoseconds as a Go duration string in whole seconds or milliseconds."""
+    if nanoseconds % _NS_PER_S == 0:
+        return f"{nanoseconds // _NS_PER_S}s"
+    if nanoseconds % _NS_PER_MS == 0:
+        return f"{nanoseconds // _NS_PER_MS}ms"
+    return f"{nanoseconds}ns"
+
 
 @dataclass(frozen=True)
 class ScrapeTarget:
@@ -284,16 +332,34 @@ class ConfigBuilder:
                 "  ]",
                 f"  forward_to      = [pyroscope.write.{PYROSCOPE_WRITE_COMPONENT_NAME}.receiver]",
                 f"  scrape_interval = {json.dumps(self._profiles_scrape_interval)}",
-                "",
-                "  profiling_config {",
             ]
         )
         enabled = set(source.profile_types)
+        if enabled & DELTA_PROFILE_TYPES:
+            duration = self._delta_profiling_duration(enabled & DELTA_PROFILE_TYPES)
+            lines.append(f"  delta_profiling_duration = {json.dumps(duration)}")
+        lines.extend(["", "  profiling_config {"])
         for profile_type in PROFILE_TYPES:
             flag = "true" if profile_type in enabled else "false"
             lines.extend([f"    profile.{profile_type} {{", f"      enabled = {flag}", "    }"])
         lines.extend(["  }", "}"])
         return "\n".join(lines)
+
+    def _delta_profiling_duration(self, delta_types: set[str]) -> str:
+        """Derive the capture window Alloy accepts for the configured scrape interval.
+
+        Alloy itself requests ``scrape_interval - 1s`` of CPU profile when the
+        duration is left at its default, but validates against a fixed 14s
+        default; rendering the derived value keeps the two consistent.
+        """
+        interval_ns = parse_go_duration(self._profiles_scrape_interval)
+        duration_ns = interval_ns - _NS_PER_S
+        if duration_ns <= _NS_PER_S:
+            raise ValueError(
+                f"profiles_scrape_interval {self._profiles_scrape_interval!r} must be longer than 2s "
+                f"when delta profile types are enabled ({', '.join(sorted(delta_types))})"
+            )
+        return format_go_duration(duration_ns)
 
     def _metrics_forward_to(self) -> str:
         return (

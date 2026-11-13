@@ -140,3 +140,15 @@ async def test_profiling_reaches_pyroscope(ops_test: OpsTest):
             await asyncio.sleep(10)
 
     assert not missing, f"profile types never appeared in Pyroscope: {sorted(missing)}"
+
+    # Intervals below 15s used to leave delta_profiling_duration at Alloy's 14s
+    # default, which `alloy fmt` accepts but `alloy run` rejects at startup.
+    await ops_test.model.applications[PROF_APP_NAME].set_config({"profiles_scrape_interval": "10s"})
+    await ops_test.model.wait_for_idle(apps=[PROF_APP_NAME], status="active", timeout=600)
+    prof_unit = ops_test.model.applications[PROF_APP_NAME].units[0].name
+    rc, stdout, stderr = await ops_test.juju("ssh", prof_unit, "sudo", "cat", "/etc/alloy/config.alloy")
+    assert rc == 0, stderr
+    assert 'delta_profiling_duration = "9s"' in stdout
+    await asyncio.sleep(30)
+    rc, stdout, stderr = await ops_test.juju("ssh", prof_unit, "systemctl", "is-active", "alloy")
+    assert stdout.strip() == "active", f"alloy not running after 10s profiles_scrape_interval: {stdout} {stderr}"
