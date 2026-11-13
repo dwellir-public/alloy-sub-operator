@@ -32,5 +32,39 @@
     "upstream_owner_repository": "https://github.com/canonical/grafana-cloud-integrator",
     "upstream_base_commit": null,
     "modifications": "Downstream implementation retains Canonical LIBID/API/PATCH but no exact Canonical base found. Removes relation-data credential logging from initial downstream import 13c9429e4c100a4bcaa27f86350e415bdad0b12e."
+  },
+  {
+    "path": "lib/charms/dwellir_observability/v0/pprof_scrape.py",
+    "sha256": "eb03e0c3fd8b19711d1df0c099117dcf77211e53b96181dbdaab3755bde07baf",
+    "library": {
+      "LIBID": "c4f8b2a6d1e94a3f9b7e5d20a8c61f43",
+      "LIBAPI": 0,
+      "LIBPATCH": 1
+    },
+    "scope": "runtime",
+    "upstream_path": "lib/charms/dwellir_observability/v0/pprof_scrape.py",
+    "repository": "https://github.com/dwellir-public/alloy-sub-operator",
+    "commit": "fa2d7a140b924b82705ce9e841ba47d5d9d3514a",
+    "license": "Apache-2.0",
+    "upstream_owner_repository": "https://github.com/dwellir-public/alloy-sub-operator",
+    "upstream_base_commit": null,
+    "modifications": "None: authored here; this repository is the canonical source."
+  },
+  {
+    "path": "lib/charms/pyroscope_coordinator_k8s/v0/profiling.py",
+    "sha256": "c6b673586b12ab7503ae4f465082828845bb7957e5d029f009f4a6f3bde49ab2",
+    "library": {
+      "LIBID": "a04f470b17b64e9abcdb102f5458df55",
+      "LIBAPI": 0,
+      "LIBPATCH": 5
+    },
+    "scope": "runtime",
+    "upstream_path": "lib/charms/pyroscope_coordinator_k8s/v0/profiling.py",
+    "repository": "https://github.com/dwellir-public/pyroscope-vm-operator",
+    "commit": "0a61d8e08f2bbf4461dd2766865c1f9beb8ad01c",
+    "license": "Apache-2.0",
+    "upstream_owner_repository": "https://github.com/canonical/pyroscope-operators",
+    "upstream_base_commit": null,
+    "modifications": "None: exact copy."
   }
 ]

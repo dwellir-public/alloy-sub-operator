@@ -25,7 +25,7 @@ config:
     systemd-service:
       description: |
         Exact systemd unit name to collect from the principal machine's journal,
-        for example iris.service. An empty value adds no journal source.
+        for example my-app.service. An empty value adds no journal source.
         This unit is collected alongside systemd_units declared through the
         machine-observability relation; duplicate unit names are collected once.
         Collection works with only a juju-info attachment and can coexist with
@@ -91,6 +91,14 @@ config:
         off where remote write volume is a concern.
       type: boolean
       default: false
+    profiles_scrape_interval:
+      description: |
+        How often Alloy pulls each pprof profile from profiling-source targets,
+        as a Go duration (for example 10s or 1m). When process_cpu or fgprof is
+        enabled, CPU is captured for the interval minus 1s, so the interval must
+        be longer than 2s.
+      type: string
+      default: "15s"
     tls_insecure_skip_verify:
       description: |
         Skip TLS verification for rendered scrape jobs when true.
@@ -124,6 +132,19 @@ requires:
   grafana-cloud-config:
     interface: grafana_cloud_config
     optional: true
+  profiling-source:
+    interface: pprof_scrape
+    scope: container
+    optional: true
+    description: pprof targets the principal publishes for Alloy to pull.
+  send-profiles:
+    interface: profiling
+    optional: true
+    limit: 1
+    description: |
+      Pyroscope to push profiles to, using Pyroscope's native ingest on the advertised
+      host:port. Relate to pyroscope-vm:profiling. Not compatible with OTLP-only receivers
+      such as opentelemetry-collector:receive-profiles.
 
 parts:
   cos-tool:

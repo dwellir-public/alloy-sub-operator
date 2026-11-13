@@ -22,6 +22,8 @@ and consumes generic workload source declarations from the principal over
 - `machine-observability`: generic workload source declarations from the principal
 - `send-loki-logs`: outbound Loki forwarding
 - `send-remote-write`: outbound metrics forwarding
+- `profiling-source`: pprof targets published by the principal, pulled by Alloy
+- `send-profiles`: outbound Pyroscope forwarding of pulled profiles
 
 The same sink relations carry standard alert-rule databags. Dashboards are
 published directly by principals to Grafana and are outside Alloy's role.

@@ -2,8 +2,10 @@
 # Copyright 2025 Erik Lönroth
 # See LICENSE file for licensing details.
 
+import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
+PROF_APP_NAME = "alloy-sub-prof"
+EXPECTED_PROFILE_TYPE_IDS = (
+    "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+    "memory:alloc_space:bytes:space:bytes",
+    "goroutine:goroutine:count:goroutine:count",
+    "mutex:delay:nanoseconds:contentions:count",
+    "block:delay:nanoseconds:contentions:count",
+)
 POLKADOT_CHARM_PATH = os.environ.get("POLKADOT_CHARM_PATH")
 
 
@@ -64,3 +74,81 @@ async def test_build_deploy_and_integrate_with_principal(ops_test: OpsTest):
         "/etc/alloy/config.alloy",
     )
     assert 'prometheus.scrape "polkadot"' in action[1]
+
+
+GOTODO_CHARM_PATH = os.environ.get("GOTODO_CHARM_PATH")
+PYROSCOPE_CHARM_PATH = os.environ.get("PYROSCOPE_CHARM_PATH")
+
+
+@pytest.mark.abort_on_fail
+@pytest.mark.skipif(
+    not (GOTODO_CHARM_PATH and PYROSCOPE_CHARM_PATH),
+    reason="GOTODO_CHARM_PATH and PYROSCOPE_CHARM_PATH not set",
+)
+async def test_profiling_reaches_pyroscope(ops_test: OpsTest):
+    """Profiles pulled from gotodo land in Pyroscope under service_name gotodo."""
+    alloy_sub = await ops_test.build_charm(".")
+
+    await ops_test.model.deploy(GOTODO_CHARM_PATH, application_name="gotodo")
+    await ops_test.model.deploy(alloy_sub, application_name=PROF_APP_NAME)
+    await ops_test.model.deploy(PYROSCOPE_CHARM_PATH, application_name="pyroscope-vm")
+
+    await ops_test.model.integrate(f"{PROF_APP_NAME}:juju-info", "gotodo:juju-info")
+    await ops_test.model.integrate("gotodo:profiling-source", f"{PROF_APP_NAME}:profiling-source")
+    await ops_test.model.integrate(f"{PROF_APP_NAME}:send-profiles", "pyroscope-vm:profiling")
+
+    await ops_test.model.wait_for_idle(
+        apps=[PROF_APP_NAME, "gotodo", "pyroscope-vm"],
+        status="active",
+        timeout=1500,
+    )
+
+    status = await ops_test.model.get_status()
+    address = status.applications["pyroscope-vm"].units["pyroscope-vm/0"].public_address
+    url = f"http://{address}:4040/querier.v1.QuerierService/LabelValues"
+
+    found = False
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        rc, stdout, _ = await ops_test.run(
+            "curl",
+            "-s",
+            "-XPOST",
+            "-H",
+            "Content-Type: application/json",
+            url,
+            "-d",
+            '{"name":"service_name"}',
+        )
+        if rc == 0 and "gotodo" in stdout:
+            found = True
+            break
+        await asyncio.sleep(10)
+
+    assert found, "service_name gotodo never appeared in Pyroscope"
+
+    types_url = f"http://{address}:4040/querier.v1.QuerierService/ProfileTypes"
+    missing = set(EXPECTED_PROFILE_TYPE_IDS)
+    deadline = time.monotonic() + 180
+    while missing and time.monotonic() < deadline:
+        rc, stdout, _ = await ops_test.run(
+            "curl", "-s", "-XPOST", "-H", "Content-Type: application/json", types_url, "-d", "{}"
+        )
+        if rc == 0:
+            missing = {type_id for type_id in missing if type_id not in stdout}
+        if missing:
+            await asyncio.sleep(10)
+
+    assert not missing, f"profile types never appeared in Pyroscope: {sorted(missing)}"
+
+    # Intervals below 15s used to leave delta_profiling_duration at Alloy's 14s
+    # default, which `alloy fmt` accepts but `alloy run` rejects at startup.
+    await ops_test.model.applications[PROF_APP_NAME].set_config({"profiles_scrape_interval": "10s"})
+    await ops_test.model.wait_for_idle(apps=[PROF_APP_NAME], status="active", timeout=600)
+    prof_unit = ops_test.model.applications[PROF_APP_NAME].units[0].name
+    rc, stdout, stderr = await ops_test.juju("ssh", prof_unit, "sudo", "cat", "/etc/alloy/config.alloy")
+    assert rc == 0, stderr
+    assert 'delta_profiling_duration = "9s"' in stdout
+    await asyncio.sleep(30)
+    rc, stdout, stderr = await ops_test.juju("ssh", prof_unit, "systemctl", "is-active", "alloy")
+    assert stdout.strip() == "active", f"alloy not running after 10s profiles_scrape_interval: {stdout} {stderr}"

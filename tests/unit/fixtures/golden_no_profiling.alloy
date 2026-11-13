@@ -1,0 +1,99 @@
+prometheus.remote_write "metrics" {
+  endpoint {
+    url = "http://mimir:9009/api/v1/push"
+  }
+
+  wal {
+    min_keepalive_time = "0s"
+    max_keepalive_time = "5m"
+  }
+}
+
+prometheus.exporter.unix "node" {
+  // Preserve Alloy's default netstat allowlist and add opinionated TCP diagnostics.
+  netstat { fields = "^(.*_(InErrors|InErrs)|Ip_Forwarding|Ip(6|Ext)_(InOctets|OutOctets)|Icmp6?_(InMsgs|OutMsgs)|TcpExt_(Listen.*|Syncookies.*|TCPSynRetrans|TCPTimeouts|TCPDSACKRecv|TCPLossProbes|TCPToZeroWindowAdv|TCPFromZeroWindowAdv|TCPWantZeroWindowAdv|TCPRcvQDrop|TCPBacklogDrop)|Tcp_(ActiveOpens|InSegs|OutSegs|OutRsts|PassiveOpens|RetransSegs|CurrEstab)|Udp6?_(InDatagrams|OutDatagrams|NoPorts|RcvbufErrors|SndbufErrors))$" }
+}
+
+discovery.relabel "node" {
+  targets = prometheus.exporter.unix.node.targets
+
+  rule {
+    target_label = "juju_application"
+    replacement  = "polkadot"
+  }
+
+  rule {
+    target_label = "juju_unit"
+    replacement  = "polkadot/0"
+  }
+}
+
+prometheus.scrape "node" {
+  targets = discovery.relabel.node.output
+  job_name = "node-exporter"
+  scrape_interval = "60s"
+  scrape_timeout = "10s"
+  forward_to = [prometheus.remote_write.metrics.receiver]
+}
+
+prometheus.scrape "polkadot" {
+  targets = [
+    {
+      __address__ = "10.0.0.5:9615",
+      juju_application = "polkadot",
+    },
+  ]
+  job_name = "polkadot"
+  metrics_path = "/metrics"
+  scheme = "http"
+  scrape_interval = "1m"
+  scrape_timeout = "10s"
+  forward_to = [prometheus.remote_write.metrics.receiver]
+}
+
+loki.process "juju" {
+  stage.static_labels {
+    values = {
+      juju_application = "polkadot",
+      juju_unit = "polkadot/0",
+    }
+  }
+  forward_to = [loki.write.main.receiver]
+}
+
+loki.source.journal "journald" {
+  matches = "_SYSTEMD_UNIT=snap.polkadot.polkadot.service"
+  relabel_rules = loki.relabel.journal.rules
+  labels = {log_source = "journal", systemd_unit = "snap.polkadot.polkadot.service"}
+  forward_to = [loki.process.juju.receiver]
+}
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "systemd_unit"
+  }
+
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "syslog_identifier"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+
+  rule {
+    source_labels = ["__journal_priority"]
+    target_label  = "severity"
+  }
+}
+
+loki.write "main" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

@@ -16,5 +16,17 @@
     "role": "runtime-vendored",
     "source_path": "lib/charms/grafana_cloud_integrator/v0/cloud_config_requirer.py",
     "distribution": null
+  },
+  "pprof_scrape": {
+    "repository": "https://github.com/dwellir-public/alloy-sub-operator",
+    "role": "runtime-vendored",
+    "source_path": "lib/charms/dwellir_observability/v0/pprof_scrape.py",
+    "distribution": null
+  },
+  "profiling": {
+    "repository": "https://github.com/canonical/pyroscope-operators",
+    "role": "runtime-vendored",
+    "source_path": "lib/charms/pyroscope_coordinator_k8s/v0/profiling.py",
+    "distribution": null
   }
 }
