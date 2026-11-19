@@ -269,12 +269,9 @@ class AlloySubCharm(ops.CharmBase):
         self._stored.set_default(
             last_good_config="",
             last_custom_args="",
-            ownership_evaluated=False,
+            install_hook_seen=False,
             alloy_installed=False,
         )
-        # Read once per dispatch: re-emitted deferred events run the gate before
-        # upgrade-charm does and would otherwise hide that this unit predates the marker.
-        self._predates_ownership_marker = not self._stored.ownership_evaluated
         self._install_failed = False
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
         self.pprof_sources = PprofScrapeRequirer(self, relation_name="profiling-source")
@@ -317,25 +314,25 @@ class AlloySubCharm(ops.CharmBase):
             self.framework.observe(getattr(self.on[PEER_RELATION], event), self._on_relation_event)
 
     def _claim_alloy(self, *, allow_existing: bool = False, force: bool = False) -> alloy_ownership.Claim:
-        """Try to claim the machine's Alloy for this unit and remember that ownership was evaluated."""
-        result = alloy_ownership.claim(
+        """Try to claim the machine's Alloy for this unit."""
+        return alloy_ownership.claim(
             self.unit.name,
             installed=alloy.installation() != "none",
             allow_existing=allow_existing,
             force=force,
         )
-        self._stored.ownership_evaluated = True
-        return result
 
-    def _ensure_alloy_ownership(self, *, allow_existing: bool = False) -> bool:
+    def _ensure_alloy_ownership(self) -> bool:
         """Return whether this unit owns the machine's Alloy, installing it on first ownership.
 
         A unit that does not own Alloy, or cannot tell, is blocked and must not
         touch the service. Failures block the unit instead of failing the hook.
+        A unit that never ran this charm's install hook predates the marker and
+        runs the machine's Alloy, so it may claim an installation it finds.
         """
         self._install_failed = False
         try:
-            result = self._claim_alloy(allow_existing=allow_existing)
+            result = self._claim_alloy(allow_existing=not self._stored.install_hook_seen)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Alloy ownership check failed: %s", exc)
             self.unit.status = ops.BlockedStatus(f"Alloy ownership check failed: {exc}")
@@ -378,6 +375,7 @@ class AlloySubCharm(ops.CharmBase):
 
     def _on_install(self, event: ops.InstallEvent) -> None:
         """Claim the machine's Alloy and install it when this unit owns it."""
+        self._stored.install_hook_seen = True
         self.unit.status = ops.MaintenanceStatus("Installing Alloy")
         if not self._ensure_alloy_ownership() and self._install_failed:
             event.defer()
@@ -440,15 +438,8 @@ class AlloySubCharm(ops.CharmBase):
         self._reconcile_config(event)
 
     def _on_upgrade_charm(self, event: ops.UpgradeCharmEvent) -> None:
-        """Reconcile config after charm upgrade.
-
-        A unit that never evaluated ownership predates the marker and runs the
-        machine's Alloy, so it may claim an installation it finds.
-        """
-        if self._ensure_alloy_ownership(allow_existing=self._predates_ownership_marker):
-            self._reconcile_config(event)
-        else:
-            self._reconcile_rule_groups(event)
+        """Reconcile config after charm upgrade."""
+        self._reconcile_config(event)
 
     def _on_relation_event(self, event: ops.RelationEvent) -> None:
         """Re-render config when principal relations change."""

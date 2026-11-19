@@ -80,6 +80,20 @@ def _run(event, state, *, installation, install_error=None):
     return state_out, mocks
 
 
+def _stored(**content):
+    return testing.StoredState(owner_path="AlloySubCharm", content=content)
+
+
+def _installed_here():
+    """Return the stored state of a unit that ran this revision's install hook."""
+    return _stored(install_hook_seen=True)
+
+
+def _legacy():
+    """Return the stored state of a pre-marker unit that already applied its custom args."""
+    return _stored(last_custom_args=DEFAULT_LISTEN_ADDRESS)
+
+
 def _assert_untouched(mocks):
     for name in MUTATING:
         mocks[name].assert_not_called()
@@ -106,7 +120,8 @@ def test_unit_blocks_and_touches_nothing_when_another_unit_owns_alloy(alloy_mark
 @pytest.mark.parametrize("event_name", ["install", "start", "config_changed", "update_status"])
 @pytest.mark.parametrize("installation", ["package", "other"])
 def test_unit_blocks_on_unmanaged_alloy(alloy_marker_dir, event_name, installation):
-    state_out, mocks = _run(event_name, testing.State(relations=_relations()), installation=installation)
+    state = testing.State(relations=_relations(), stored_states=[_installed_here()])
+    state_out, mocks = _run(event_name, state, installation=installation)
 
     assert state_out.unit_status == testing.BlockedStatus(UNMANAGED)
     _assert_untouched(mocks)
@@ -126,11 +141,10 @@ def test_relation_event_on_blocked_unit_touches_nothing(alloy_marker_dir):
     _assert_untouched(mocks)
 
 
-def test_legacy_unit_claims_its_running_alloy_on_upgrade(alloy_marker_dir):
-    # A legacy unit already applied its custom args; without them any upgrade restarts.
-    legacy = testing.StoredState(owner_path="AlloySubCharm", content={"last_custom_args": DEFAULT_LISTEN_ADDRESS})
-    state = testing.State(relations=_relations(), stored_states=[legacy])
-    state_out, mocks = _run("upgrade_charm", state, installation="package")
+@pytest.mark.parametrize("event_name", ["upgrade_charm", "config_changed", "update_status"])
+def test_legacy_unit_claims_its_running_alloy_on_its_first_hook(alloy_marker_dir, event_name):
+    state = testing.State(relations=_relations(), stored_states=[_legacy()])
+    state_out, mocks = _run(event_name, state, installation="package")
 
     assert alloy_ownership.current_owner() == "alloy-sub/0"
     assert isinstance(state_out.unit_status, testing.ActiveStatus)
@@ -144,9 +158,24 @@ def test_legacy_unit_with_a_deferred_event_still_claims_on_upgrade(alloy_marker_
     relations = _relations()
     ctx = testing.Context(AlloySubCharm)
     deferred = ctx.on.relation_changed(relations[1]).deferred(handler=AlloySubCharm._on_relation_event)
-    legacy = testing.StoredState(owner_path="AlloySubCharm", content={"last_custom_args": DEFAULT_LISTEN_ADDRESS})
-    state = testing.State(relations=relations, stored_states=[legacy], deferred=[deferred])
+    state = testing.State(relations=relations, stored_states=[_legacy()], deferred=[deferred])
     state_out, mocks = _run("upgrade_charm", state, installation="package")
+
+    assert alloy_ownership.current_owner() == "alloy-sub/0"
+    assert isinstance(state_out.unit_status, testing.ActiveStatus)
+    mocks["install"].assert_not_called()
+    mocks["restart"].assert_not_called()
+
+
+def test_legacy_unit_keeps_its_allowance_after_a_failed_claim(alloy_marker_dir):
+    state = testing.State(relations=_relations(), stored_states=[_legacy()])
+    with patch("charm.alloy_ownership.claim", side_effect=OSError("read-only file system")):
+        failed, mocks = _run("upgrade_charm", state, installation="package")
+
+    assert failed.unit_status == testing.BlockedStatus("Alloy ownership check failed: read-only file system")
+    _assert_untouched(mocks)
+
+    state_out, mocks = _run("update_status", failed, installation="package")
 
     assert alloy_ownership.current_owner() == "alloy-sub/0"
     assert isinstance(state_out.unit_status, testing.ActiveStatus)
@@ -162,12 +191,26 @@ def test_second_legacy_unit_on_the_machine_blocks_on_upgrade(alloy_marker_dir):
     _assert_untouched(mocks)
 
 
-def test_unit_that_blocked_as_unmanaged_does_not_auto_claim_on_later_upgrade(alloy_marker_dir):
-    blocked, _ = _run("install", testing.State(), installation="package")
-    state_out, mocks = _run("upgrade_charm", blocked, installation="package")
+@pytest.mark.parametrize("event_name", ["upgrade_charm", "config_changed", "update_status"])
+def test_unit_that_blocked_as_unmanaged_does_not_auto_claim_later(alloy_marker_dir, event_name):
+    blocked, _ = _run("install", testing.State(relations=_relations()), installation="package")
+    state_out, mocks = _run(event_name, blocked, installation="package")
 
     assert state_out.unit_status == testing.BlockedStatus(UNMANAGED)
     _assert_untouched(mocks)
+    assert alloy_ownership.current_owner() is None
+
+
+def test_unit_whose_install_claim_failed_does_not_auto_claim_later(alloy_marker_dir):
+    with patch("charm.alloy_ownership.claim", side_effect=OSError("read-only file system")):
+        failed, _ = _run("install", testing.State(relations=_relations()), installation="package")
+    assert alloy_ownership.current_owner() is None
+
+    state_out, mocks = _run("update_status", failed, installation="package")
+
+    assert state_out.unit_status == testing.BlockedStatus(UNMANAGED)
+    _assert_untouched(mocks)
+    assert alloy_ownership.current_owner() is None
 
 
 def test_blocked_unit_installs_once_the_owner_releases(alloy_marker_dir):
