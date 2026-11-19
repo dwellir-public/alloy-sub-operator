@@ -24,6 +24,13 @@ and consumes generic workload source declarations from the principal over
 - `send-remote-write`: outbound metrics forwarding
 - `profiling-source`: pprof targets published by the principal, pulled by Alloy
 - `send-profiles`: outbound Pyroscope forwarding of pulled profiles
+- `alloy-peers`: peer relation on which each unit publishes its principal application name
+
+`juju-info`, `machine-observability`, and `profiling-source` each declare
+`limit: 1`: one `alloy-sub` application serves one principal application.
+Because Juju checks each endpoint separately, units also compare the names
+published on `alloy-peers` and block, keeping the last applied config, when
+they disagree. Further principals get their own `alloy-sub` application.
 
 The same sink relations carry standard alert-rule databags. Dashboards are
 published directly by principals to Grafana and are outside Alloy's role.

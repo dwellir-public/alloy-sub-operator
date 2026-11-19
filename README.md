@@ -87,13 +87,75 @@ identity or tenant metadata on that relation. Shared Mimir partitioning is done
 through metric labels such as Juju topology rather than tenant-specific
 remote-write extensions.
 
+## Single principal
+
+One `alloy-sub` application serves exactly one principal application. The
+`juju-info`, `machine-observability`, and `profiling-source` endpoints each
+declare `limit: 1`, so Juju rejects a second relation on any of them:
+
+```text
+ERROR cannot add relation "alloy-sub:juju-info other:juju-info": establishing a new relation for alloy-sub:juju-info would exceed its maximum relation limit of 1 (quota limit exceeded)
+```
+
+Juju 3.6 prints that message only with `juju integrate --debug`; without it the
+command exits non-zero and adds no relation.
+
+The limit counts relations, not units: the one principal application can have
+any number of units, and each gets its own `alloy-sub` unit. To observe another
+principal application, deploy the charm again under its own name:
+
+```bash
+juju deploy alloy-sub alloy-sub-other
+juju relate alloy-sub-other:juju-info other
+```
+
+Juju checks each endpoint separately, so it accepts `juju-info` to one
+application and `machine-observability` or `profiling-source` to another. The
+charm catches that itself: every unit publishes its principal application name
+on the `alloy-peers` peer relation, and when the units of one application see
+more than one name they all report:
+
+```text
+Alloy service running; multiple principal applications: kusama, polkadot; relate alloy-sub to one principal
+```
+
+A blocked unit keeps Alloy running on the last applied config and applies no
+further config changes. Remove the relations to all but one principal
+application and the units return to their normal status on their own.
+
+### Upgrading an application that has several principals
+
+`juju refresh` refuses a revision whose limit is lower than the number of
+relations already established (as with `juju integrate`, Juju 3.6 shows the
+reason only with `--debug`). Before refreshing, keep one principal and move
+the others to their own `alloy-sub` application:
+
+```bash
+juju remove-relation alloy-sub:juju-info other:juju-info
+juju remove-relation alloy-sub:machine-observability other:machine-observability
+juju remove-relation alloy-sub:profiling-source other:profiling-source  # if related
+juju deploy alloy-sub alloy-sub-other
+juju relate alloy-sub-other:juju-info other
+juju relate alloy-sub-other:machine-observability other:machine-observability
+juju relate alloy-sub-other:profiling-source other:profiling-source  # if it was related
+juju refresh alloy-sub
+```
+
+Wait for the old `alloy-sub` units to leave the moved principal's machines
+before relating `alloy-sub-other`. Two `alloy-sub` applications on one machine
+share a single Alloy service and config file, and the departing unit stops it.
+
+Relate `alloy-sub-other` to the same Loki, remote-write, and Pyroscope
+applications as `alloy-sub` so the moved principal keeps forwarding telemetry
+and alert rules.
+
 ## Profiling
 
 `alloy-sub` pulls pprof profiles from the principal and pushes them to Pyroscope.
 
 | Relation | Interface | Notes |
 | --- | --- | --- |
-| `profiling-source` | `pprof_scrape` | optional, `scope: container` |
+| `profiling-source` | `pprof_scrape` | optional, `scope: container`, `limit: 1` |
 | `send-profiles` | `profiling` | optional, `limit: 1` |
 
 ```bash

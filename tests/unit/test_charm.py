@@ -802,7 +802,7 @@ def test_configure_restarts_alloy_when_custom_args_change():
         patch("charm.alloy.restart") as restart_mock,
     ):
         builder_cls.return_value.build.return_value = ""
-        AlloySubCharm._configure(fake_charm, active_message="Alloy config updated")
+        AlloySubCharm._render_and_apply(fake_charm, active_message="Alloy config updated")
 
     restart_mock.assert_called_once()
     reload_mock.assert_not_called()
@@ -867,7 +867,7 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         patch("charm.alloy.restart") as restart_mock,
     ):
         builder_cls.return_value.build.return_value = ""
-        AlloySubCharm._configure(fake_charm, active_message="Alloy config updated")
+        AlloySubCharm._render_and_apply(fake_charm, active_message="Alloy config updated")
 
     restart_mock.assert_called_once()
     reload_mock.assert_not_called()
@@ -932,7 +932,7 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         patch("charm.alloy.restart") as restart_mock,
     ):
         builder_cls.return_value.build.return_value = ""
-        AlloySubCharm._configure(fake_charm, active_message="Alloy config updated")
+        AlloySubCharm._render_and_apply(fake_charm, active_message="Alloy config updated")
 
     reload_mock.assert_called_once()
     restart_mock.assert_not_called()

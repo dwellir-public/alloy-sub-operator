@@ -101,3 +101,43 @@ def test_readme_documents_profiling():
 
     assert "## Profiling" in readme
     assert "profiling-source" in readme
+
+
+def test_principal_facing_endpoints_are_limited_to_one_principal():
+    """Juju only refuses a second principal application when limit is declared."""
+    import yaml
+
+    metadata = yaml.safe_load(Path("charmcraft.yaml").read_text())
+    requires = metadata["requires"]
+
+    for endpoint in ("juju-info", "machine-observability", "profiling-source"):
+        assert requires[endpoint]["scope"] == "container"
+        assert requires[endpoint]["limit"] == 1
+    for endpoint in ("send-loki-logs", "send-remote-write", "grafana-cloud-config"):
+        assert "limit" not in requires[endpoint]
+    assert requires["send-profiles"]["limit"] == 1
+    assert metadata["peers"] == {"alloy-peers": {"interface": "alloy_sub_peers"}}
+
+
+def test_readme_documents_single_principal_rule():
+    readme = Path("README.md").read_text()
+
+    assert "## Single principal" in readme
+    section = readme.split("## Single principal")[1].split("\n## ")[0]
+    for endpoint in ("`juju-info`", "`machine-observability`", "`profiling-source`"):
+        assert endpoint in section
+    assert "`limit: 1`" in section
+    assert "`alloy-peers`" in section
+    assert "multiple principal applications: kusama, polkadot; relate alloy-sub to one principal" in section
+    assert "juju deploy alloy-sub alloy-sub-" in section
+    assert "juju remove-relation" in section
+    assert "juju refresh" in section
+    assert "| `profiling-source` | `pprof_scrape` | optional, `scope: container`, `limit: 1` |" in readme
+
+
+def test_architecture_doc_states_single_principal_rule():
+    architecture = Path("docs/charm-architecture.md").read_text()
+
+    assert "one principal application" in architecture
+    assert "`limit: 1`" in architecture
+    assert "`alloy-peers`" in architecture
