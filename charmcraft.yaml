@@ -119,6 +119,23 @@ config:
       type: int
       default: 5
 
+actions:
+  adopt-alloy:
+    description: |
+      Take ownership of an Alloy that is already installed on this machine from
+      the alloy deb package and is not managed by another unit. The existing
+      config is preserved next to the generated one and is replaced by the
+      charm-rendered config; Alloy is restarted once.
+    params:
+      force:
+        type: boolean
+        default: false
+        description: |
+          Also take over from the unit recorded as the current owner. Use only
+          when that unit no longer exists; two managers on one Alloy overwrite
+          each other.
+    additionalProperties: false
+
 requires:
   juju-info:
     interface: juju-info

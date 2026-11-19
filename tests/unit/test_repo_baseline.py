@@ -141,3 +141,13 @@ def test_architecture_doc_states_single_principal_rule():
     assert "one principal application" in architecture
     assert "`limit: 1`" in architecture
     assert "`alloy-peers`" in architecture
+
+
+def test_charmcraft_declares_the_adopt_alloy_action():
+    import yaml
+
+    action = yaml.safe_load(Path("charmcraft.yaml").read_text())["actions"]["adopt-alloy"]
+    assert action["params"] == {
+        "force": {"type": "boolean", "default": False, "description": action["params"]["force"]["description"]}
+    }
+    assert action["additionalProperties"] is False

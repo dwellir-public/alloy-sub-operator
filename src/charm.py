@@ -39,6 +39,7 @@ try:
     from .alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
     from .config_builder import (
         DEFAULT_CONFIG_PATH,
+        DEFAULT_PACKAGE_CONFIG_BACKUP_PATH,
         ConfigBuilder,
         HostMetrics,
         ProfilingSource,
@@ -82,6 +83,7 @@ except ImportError:
     from alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
     from config_builder import (
         DEFAULT_CONFIG_PATH,
+        DEFAULT_PACKAGE_CONFIG_BACKUP_PATH,
         ConfigBuilder,
         HostMetrics,
         ProfilingSource,
@@ -278,6 +280,7 @@ class AlloySubCharm(ops.CharmBase):
         self._rule_validator = CosToolRuleValidator()
 
         self.framework.observe(self.on.install, self._on_install)
+        self.framework.observe(self.on.adopt_alloy_action, self._on_adopt_alloy_action)
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.on.stop, self._on_stop)
         self.framework.observe(self.on.config_changed, self._on_config_changed)
@@ -369,6 +372,44 @@ class AlloySubCharm(ops.CharmBase):
     def _install_alloy(self) -> None:
         """Install Alloy and preserve the package-provided config."""
         alloy.install()
+        alloy.preserve_default_config(config_path=Path(DEFAULT_CONFIG_PATH))
+        alloy.write_custom_args(self._desired_custom_args())
+        self._stored.alloy_installed = True
+
+    def _on_adopt_alloy_action(self, event: ops.ActionEvent) -> None:
+        """Hand an unmanaged, deb-package Alloy to this unit."""
+        if alloy.installation() == "other":
+            event.fail(
+                "Alloy on this machine was not installed from the alloy deb package and cannot be adopted; uninstall it"
+            )
+            return
+        try:
+            claim = self._claim_alloy(allow_existing=True, force=bool(event.params["force"]))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Alloy ownership check failed: %s", exc)
+            event.fail(f"Alloy ownership check failed: {exc}")
+            return
+        if claim.state != "owned":
+            event.fail(
+                f"Alloy on this machine is managed by {claim.owner}; pass force=true only if that unit no longer exists"
+            )
+            return
+        self._adopt_installed_alloy()
+        alloy.start()
+        self._configure(active_message="Alloy adopted")
+        event.set_results(
+            {
+                "owner": self.unit.name,
+                "version": alloy.get_version() or "unknown",
+                "preserved-config": DEFAULT_PACKAGE_CONFIG_BACKUP_PATH,
+            }
+        )
+
+    def _adopt_installed_alloy(self) -> None:
+        """Install Alloy when absent, otherwise preserve its config and apply the charm's custom args."""
+        if alloy.installation() == "none":
+            self._install_alloy()
+            return
         alloy.preserve_default_config(config_path=Path(DEFAULT_CONFIG_PATH))
         alloy.write_custom_args(self._desired_custom_args())
         self._stored.alloy_installed = True
