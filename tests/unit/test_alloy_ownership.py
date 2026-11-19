@@ -8,7 +8,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
-from alloy_ownership import Claim, claim, current_owner, release
+from alloy_ownership import Claim, claim, current_owner, release, restore
 
 
 def _marker(tmp_path):
@@ -55,7 +55,7 @@ def test_force_takes_over_from_another_owner(tmp_path):
     assert current_owner(marker_dir=tmp_path) == "other-sub/3"
 
 
-@pytest.mark.parametrize("content", ["", "not json", "[]", '{"owner": 7}', '{"other": "x"}'])
+@pytest.mark.parametrize("content", ["", "not json", "[]", '{"owner": 7}', '{"other": "x"}', '{"owner": ""}'])
 def test_unreadable_marker_blocks_until_forced(tmp_path, content):
     _marker(tmp_path).write_text(content)
     assert claim("alloy-sub/0", installed=True, marker_dir=tmp_path) == Claim("other", "unknown")
@@ -101,3 +101,45 @@ def test_simultaneous_first_claims_have_one_winner(tmp_path):
     winners = [result for result in results if result.state == "owned"]
     assert len(winners) == 1
     assert all(result == Claim("other", winners[0].owner) for result in results if result.state != "owned")
+
+
+def _seed(tmp_path, prior):
+    """Put the marker into one of the states a claim can find."""
+    if prior == "missing":
+        return
+    if prior == "released":
+        claim("alloy-sub/9", installed=False, marker_dir=tmp_path)
+        release("alloy-sub/9", marker_dir=tmp_path)
+    elif prior == "owner":
+        claim("other-sub/3", installed=False, marker_dir=tmp_path)
+    else:
+        _marker(tmp_path).write_bytes(b"\xff not json")
+
+
+@pytest.mark.parametrize("prior", ["missing", "released", "owner", "unreadable"])
+def test_restore_puts_back_exactly_the_state_the_claim_found(tmp_path, prior):
+    _seed(tmp_path, prior)
+    before = _marker(tmp_path).read_bytes() if _marker(tmp_path).exists() else None
+
+    taken = claim("alloy-sub/0", installed=True, allow_existing=True, force=True, marker_dir=tmp_path)
+    assert taken.state == "owned"
+    assert current_owner(marker_dir=tmp_path) == "alloy-sub/0"
+
+    assert restore("alloy-sub/0", taken.prior, marker_dir=tmp_path) is True
+    after = _marker(tmp_path).read_bytes() if _marker(tmp_path).exists() else None
+    assert after == before
+
+
+def test_restore_leaves_a_marker_that_no_longer_names_the_unit(tmp_path):
+    taken = claim("alloy-sub/0", installed=False, marker_dir=tmp_path)
+    claim("other-sub/3", installed=True, force=True, marker_dir=tmp_path)
+
+    assert restore("alloy-sub/0", taken.prior, marker_dir=tmp_path) is False
+    assert current_owner(marker_dir=tmp_path) == "other-sub/3"
+
+
+def test_claim_records_prior_state_without_changing_claim_equality(tmp_path):
+    taken = claim("alloy-sub/0", installed=False, marker_dir=tmp_path)
+    assert taken == Claim("owned", "alloy-sub/0")
+    assert taken.prior is not None
+    assert taken.prior.content is None

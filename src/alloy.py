@@ -146,15 +146,22 @@ def custom_args_applied(custom_args: str) -> bool:
 
 
 def _probe(cmd: list[str]) -> str | None:
-    """Run a read-only probe; return its stdout, or None when it fails for any reason."""
+    """Run a read-only probe; return its stdout, or None when it answers no.
+
+    Only a command that ran and failed, or a tool that does not exist, means
+    no. A timeout or any other OS error propagates: the probe could not tell.
+    """
     try:
         return _run(cmd, timeout=DEFAULT_STATUS_TIMEOUT).stdout or ""
-    except (subprocess.SubprocessError, OSError):
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return None
 
 
 def installation() -> Literal["none", "package", "other"]:
-    """Report how Alloy is installed: by the apt package, some other way, or not at all."""
+    """Report how Alloy is installed: by the apt package, some other way, or not at all.
+
+    Raises ``subprocess.TimeoutExpired`` or ``OSError`` when a probe cannot answer.
+    """
     status = _probe(["dpkg-query", "-W", "-f=${Status}", "alloy"])
     if status is not None and status.strip() == "install ok installed":
         return "package"
