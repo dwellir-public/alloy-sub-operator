@@ -126,17 +126,24 @@ application and the units return to their normal status on their own.
 ### Upgrading an application that has several principals
 
 `juju refresh` refuses a revision whose limit is lower than the number of
-relations already established. Before refreshing, keep one principal and move
+relations already established (as with `juju integrate`, Juju 3.6 shows the
+reason only with `--debug`). Before refreshing, keep one principal and move
 the others to their own `alloy-sub` application:
 
 ```bash
 juju remove-relation alloy-sub:juju-info other:juju-info
 juju remove-relation alloy-sub:machine-observability other:machine-observability
+juju remove-relation alloy-sub:profiling-source other:profiling-source  # if related
 juju deploy alloy-sub alloy-sub-other
 juju relate alloy-sub-other:juju-info other
 juju relate alloy-sub-other:machine-observability other:machine-observability
+juju relate alloy-sub-other:profiling-source other:profiling-source  # if it was related
 juju refresh alloy-sub
 ```
+
+Wait for the old `alloy-sub` units to leave the moved principal's machines
+before relating `alloy-sub-other`. Two `alloy-sub` applications on one machine
+share a single Alloy service and config file, and the departing unit stops it.
 
 Relate `alloy-sub-other` to the same Loki, remote-write, and Pyroscope
 applications as `alloy-sub` so the moved principal keeps forwarding telemetry

@@ -98,12 +98,23 @@ async def test_second_principal_is_rejected_on_limited_endpoints(ops_test: OpsTe
 @pytest.mark.skipif(not POLKADOT_CHARM_PATH, reason="POLKADOT_CHARM_PATH not set")
 async def test_split_principals_block_every_unit(ops_test: OpsTest):
     """juju-info to one principal and machine-observability to another blocks all units."""
+    # A dedicated machine-observability principal: a second Alloy subordinate on
+    # polkadot's machine would share, and on removal stop, alloy-sub's Alloy service.
     alloy_sub = await ops_test.build_charm(".")
+    polkadot_charm = await ops_test.build_charm(POLKADOT_CHARM_PATH)
     await ops_test.model.deploy(alloy_sub, application_name=SPLIT_APP_NAME)
+    await ops_test.model.deploy(
+        polkadot_charm,
+        application_name="polkadot-split",
+        config={
+            "service-args": "--chain=polkadot --rpc-port=9933",
+            "snap-name": "polkadot",
+        },
+    )
     await ops_test.model.integrate(f"{SPLIT_APP_NAME}:juju-info", "second-principal:juju-info")
-    await ops_test.model.integrate(f"{SPLIT_APP_NAME}:machine-observability", "polkadot:machine-observability")
+    await ops_test.model.integrate(f"{SPLIT_APP_NAME}:machine-observability", "polkadot-split:machine-observability")
 
-    expected = "multiple principal applications: polkadot, second-principal; relate alloy-sub to one principal"
+    expected = "multiple principal applications: polkadot-split, second-principal; relate alloy-sub to one principal"
     await ops_test.model.block_until(
         lambda: (
             len(ops_test.model.applications[SPLIT_APP_NAME].units) == 2
@@ -115,7 +126,9 @@ async def test_split_principals_block_every_unit(ops_test: OpsTest):
         timeout=900,
     )
 
-    await ops_test.juju("remove-relation", f"{SPLIT_APP_NAME}:machine-observability", "polkadot:machine-observability")
+    await ops_test.juju(
+        "remove-relation", f"{SPLIT_APP_NAME}:machine-observability", "polkadot-split:machine-observability"
+    )
     await ops_test.model.block_until(
         lambda: (
             len(ops_test.model.applications[SPLIT_APP_NAME].units) == 1
@@ -126,6 +139,7 @@ async def test_split_principals_block_every_unit(ops_test: OpsTest):
 
     await ops_test.model.remove_application(SPLIT_APP_NAME, block_until_done=True)
     await ops_test.model.remove_application("second-principal", block_until_done=True)
+    await ops_test.model.remove_application("polkadot-split", block_until_done=True)
 
 
 GOTODO_CHARM_PATH = os.environ.get("GOTODO_CHARM_PATH")
