@@ -141,13 +141,65 @@ juju relate alloy-sub-other:profiling-source other:profiling-source  # if it was
 juju refresh alloy-sub
 ```
 
-Wait for the old `alloy-sub` units to leave the moved principal's machines
-before relating `alloy-sub-other`. Two `alloy-sub` applications on one machine
-share a single Alloy service and config file, and the departing unit stops it.
+If `alloy-sub-other` lands on a machine where an old `alloy-sub` unit is still
+leaving, it blocks until that unit is gone and then installs on its own; see
+"One Alloy per machine".
 
 Relate `alloy-sub-other` to the same Loki, remote-write, and Pyroscope
 applications as `alloy-sub` so the moved principal keeps forwarding telemetry
 and alert rules.
+
+## One Alloy per machine
+
+Alloy is one machine-wide service with one config file, so exactly one unit
+may manage it. The owning unit is recorded in
+`/var/lib/juju-alloy/owner.json`. A unit that does not own Alloy installs
+nothing, writes no config, and never starts or stops the service.
+
+For several workloads on one machine, use one `alloy-vm` principal related to
+every colocated workload over `machine-observability`, not one `alloy-sub` per
+workload.
+
+| Status | Meaning | What to do |
+| --- | --- | --- |
+| `Alloy on this machine is managed by <unit>; remove this unit's principal relation` | Another unit already owns Alloy here. | Remove this unit's relation, or the other unit's. The remaining unit takes over within one `update-status` interval. |
+| `unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy` | Alloy is installed but no unit owns it: a manual install, or one managed by `alloy-vm`. | If `alloy-vm` manages it, remove this unit's relation. Otherwise adopt or uninstall it, below. |
+
+### Adopting a manually installed Alloy
+
+```bash
+juju run alloy-sub/0 adopt-alloy
+```
+
+The unit takes ownership without reinstalling, so the installed version stays.
+Your existing `/etc/alloy/config.alloy` is preserved and replaced by the
+charm-rendered config, and Alloy restarts once. Anything your config collected
+that the charm does not render stops being collected. Only an Alloy installed
+from the `alloy` deb package can be adopted.
+
+To start clean instead, remove the package and let the unit install its own:
+
+```bash
+juju ssh alloy-sub/0 sudo apt-get purge alloy
+```
+
+### An owner that no longer exists
+
+If the owning unit was removed without running its hooks, the marker still
+names it. After checking with `juju status` that the unit is gone:
+
+```bash
+juju run alloy-sub/0 adopt-alloy force=true
+```
+
+Never force while the named unit exists: two managers overwrite each other.
+
+### Upgrading
+
+A unit that already runs Alloy claims ownership on its first hook after the refresh
+and keeps its service running. Where two `alloy-sub` units already share a machine,
+the first to upgrade keeps Alloy and the second blocks; remove the second one's
+relation.
 
 ## Profiling
 

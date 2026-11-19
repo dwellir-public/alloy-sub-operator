@@ -151,3 +151,24 @@ def test_charmcraft_declares_the_adopt_alloy_action():
         "force": {"type": "boolean", "default": False, "description": action["params"]["force"]["description"]}
     }
     assert action["additionalProperties"] is False
+
+
+def test_readme_documents_alloy_ownership_and_adoption():
+    readme = Path("README.md").read_text()
+
+    assert "## One Alloy per machine" in readme
+    section = readme.split("## One Alloy per machine")[1].split("\n## ")[0]
+    assert "Alloy on this machine is managed by <unit>; remove this unit's principal relation" in section
+    assert "unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy" in section
+    assert "juju run alloy-sub/0 adopt-alloy" in section
+    assert "force=true" in section
+    assert "/var/lib/juju-alloy/owner.json" in section
+    assert "alloy-vm" in section
+    assert "apt-get purge alloy" in section
+
+
+def test_architecture_doc_states_alloy_ownership():
+    architecture = Path("docs/charm-architecture.md").read_text()
+
+    assert "/var/lib/juju-alloy/owner.json" in architecture
+    assert "adopt-alloy" in architecture
