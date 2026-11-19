@@ -47,10 +47,10 @@ def _juju_info():
     )
 
 
-def _source_relation(payload=None):
+def _source_relation(payload=None, *, remote_app_name="my-app"):
     return testing.SubordinateRelation(
         "profiling-source",
-        remote_app_name="my-app",
+        remote_app_name=remote_app_name,
         remote_unit_id=0,
         remote_unit_data={"profiling_source": payload or _payload()},
     )
@@ -217,7 +217,7 @@ def test_malformed_send_profiles_does_not_block_metrics():
         remote_app_name="pyroscope-vm",
         remote_app_data={"otlp_grpc_endpoint_url": "10.0.0.9:4040", "insecure": json.dumps(True)},
     )
-    state = testing.State(relations=[*_metrics_relations(), _source_relation(), bad_sink])
+    state = testing.State(relations=[*_metrics_relations(), _source_relation(remote_app_name="polkadot"), bad_sink])
     state_out, builder_cls, _ = _run(lambda ctx: ctx.on.start(), state)
 
     assert state_out.unit_status == testing.ActiveStatus(ACTIVE_MACHINE_OBSERVABILITY)
@@ -227,7 +227,9 @@ def test_malformed_send_profiles_does_not_block_metrics():
 
 
 def test_machine_observability_and_profiling_together():
-    state = testing.State(relations=[*_metrics_relations(), _source_relation(), _sink_relation()])
+    state = testing.State(
+        relations=[*_metrics_relations(), _source_relation(remote_app_name="polkadot"), _sink_relation()]
+    )
     state_out, builder_cls, _ = _run(lambda ctx: ctx.on.start(), state)
 
     assert state_out.unit_status == testing.ActiveStatus(ACTIVE_MACHINE_OBSERVABILITY)

@@ -55,6 +55,14 @@ try:
     from .host_alert_rules import build_host_alert_rule_groups
     from .outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from .principal_context import PrincipalContext
+    from .principal_guard import (
+        PEER_KEY,
+        PEER_RELATION,
+        PRINCIPAL_ENDPOINTS,
+        conflicting_principals,
+        decode_principals,
+        encode_principals,
+    )
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
         MAX_SERIALIZED_PAYLOAD_BYTES,
@@ -89,6 +97,14 @@ except ImportError:
     from host_alert_rules import build_host_alert_rule_groups
     from outbound_endpoints import OutboundEndpoint, dedupe_endpoints
     from principal_context import PrincipalContext
+    from principal_guard import (
+        PEER_KEY,
+        PEER_RELATION,
+        PRINCIPAL_ENDPOINTS,
+        conflicting_principals,
+        decode_principals,
+        encode_principals,
+    )
 
 
 class PayloadDecodeError(ValueError):
@@ -287,6 +303,8 @@ class AlloySubCharm(ops.CharmBase):
             self.on["profiling-source"].relation_departed,
             self._on_relation_event,
         )
+        for event in ("relation_joined", "relation_changed", "relation_departed"):
+            self.framework.observe(getattr(self.on[PEER_RELATION], event), self._on_relation_event)
 
     def _on_install(self, event: ops.InstallEvent) -> None:
         """Install Alloy and preserve the package-provided config."""
@@ -820,7 +838,39 @@ class AlloySubCharm(ops.CharmBase):
 
         return schema_version, artifacts
 
+    def _local_principal_applications(self) -> set[str]:
+        """Return the principal application names related on this unit's principal endpoints."""
+        return {
+            relation.app.name
+            for endpoint in PRINCIPAL_ENDPOINTS
+            for relation in self.model.relations.get(endpoint, [])
+            if relation.app is not None
+        }
+
+    def _principal_conflict(self) -> list[str]:
+        """Publish local principals to peers and return all names when more than one is in use."""
+        local = self._local_principal_applications()
+        peer_sets: list[frozenset[str]] = []
+        relation = self.model.get_relation(PEER_RELATION)
+        if relation is not None:
+            relation.data[self.unit][PEER_KEY] = encode_principals(local)
+            peer_sets = [decode_principals(relation.data[unit].get(PEER_KEY)) for unit in relation.units]
+        return conflicting_principals(local, peer_sets)
+
     def _configure(self, *, active_message: str) -> bool:
+        """Render and apply config unless more than one principal application is attached."""
+        conflict = self._principal_conflict()
+        if conflict:
+            logger.warning("Multiple principal applications attached: %s; retaining current config", conflict)
+            self.unit.status = ops.BlockedStatus(
+                self._status_message(
+                    f"multiple principal applications: {', '.join(conflict)}; relate alloy-sub to one principal"
+                )
+            )
+            return False
+        return self._render_and_apply(active_message=active_message)
+
+    def _render_and_apply(self, *, active_message: str) -> bool:
         """Render, validate, and apply Alloy config from relation data."""
         try:
             payload = self._observability_payload()
