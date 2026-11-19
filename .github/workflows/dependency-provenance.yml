@@ -19,6 +19,10 @@ jobs:
             base: ubuntu@24.04
             platform: ubuntu@24.04:amd64
             artifact: alloy-sub_ubuntu@24.04-amd64.charm
+          - runner: ubuntu-26.04
+            base: ubuntu@26.04
+            platform: ubuntu@26.04:amd64
+            artifact: alloy-sub_ubuntu@26.04-amd64.charm
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6

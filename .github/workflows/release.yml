@@ -62,15 +62,42 @@ jobs:
           path: ./alloy-sub_ubuntu@24.04-amd64.charm
           if-no-files-found: error
 
+  build-ubuntu-26:
+    name: Build charm on ubuntu-26.04
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Charmcraft
+        run: sudo snap install charmcraft --classic --channel latest/stable
+
+      - name: Build charm for ubuntu@26.04:amd64
+        run: sudo charmcraft pack --destructive-mode --platform ubuntu@26.04:amd64 --quiet
+
+      - name: Upload charm artifact (ubuntu@26.04:amd64)
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: charm-ubuntu-26-amd64
+          path: ./alloy-sub_ubuntu@26.04-amd64.charm
+          if-no-files-found: error
+
   release:
     name: Release to CharmHub
     needs:
       - build-ubuntu-22
       - build-ubuntu-24
+      - build-ubuntu-26
     runs-on: ubuntu-latest
     outputs:
       rev_ubuntu_22: ${{ steps.upload_ubuntu_22.outputs.revision }}
       rev_ubuntu_24: ${{ steps.upload_ubuntu_24.outputs.revision }}
+      rev_ubuntu_26: ${{ steps.upload_ubuntu_26.outputs.revision }}
       release_channel: latest/edge
     permissions:
       actions: read
@@ -127,6 +154,24 @@ jobs:
 
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
 
+      - name: Upload ubuntu@26.04 charm to Charmhub edge
+        id: upload_ubuntu_26
+        env:
+          CHARMCRAFT_AUTH: "${{ secrets.CHARMHUB_TOKEN }}"
+        run: |
+          set -euo pipefail
+
+          output="$(charmcraft upload --format json --release latest/edge ./alloy-sub_ubuntu@26.04-amd64.charm)"
+          echo "$output"
+
+          revision="$(python3 -c 'import json, sys; print(json.loads(sys.stdin.read())["revision"])' <<< "$output")"
+          if [[ ! "$revision" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Charmcraft upload JSON did not include a positive integer revision for ubuntu@26.04" >&2
+            exit 1
+          fi
+
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
   github-release:
     name: Create GitHub release
     needs:
@@ -154,6 +199,7 @@ jobs:
           CHANNEL: ${{ needs.release.outputs.release_channel }}
           REVISION_22: ${{ needs.release.outputs.rev_ubuntu_22 }}
           REVISION_24: ${{ needs.release.outputs.rev_ubuntu_24 }}
+          REVISION_26: ${{ needs.release.outputs.rev_ubuntu_26 }}
         run: |
           set -euo pipefail
 
@@ -169,8 +215,12 @@ jobs:
             echo "Missing or invalid ubuntu@24.04 Charmhub revision output" >&2
             exit 1
           fi
+          if [[ ! "$REVISION_26" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Missing or invalid ubuntu@26.04 Charmhub revision output" >&2
+            exit 1
+          fi
 
-          tag="latest-edge-r${REVISION_22}-r${REVISION_24}"
+          tag="latest-edge-r${REVISION_22}-r${REVISION_24}-r${REVISION_26}"
           name="Charm release ${tag}"
 
           {
@@ -181,6 +231,7 @@ jobs:
             echo
             echo "- ubuntu@22.04:amd64 revision: \`${REVISION_22}\`"
             echo "- ubuntu@24.04:amd64 revision: \`${REVISION_24}\`"
+            echo "- ubuntu@26.04:amd64 revision: \`${REVISION_26}\`"
             echo
             echo "Source commit: \`${GITHUB_SHA}\`."
             echo "EOF"
@@ -193,7 +244,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ ! "$TAG" =~ ^latest-edge-r[1-9][0-9]*-r[1-9][0-9]*$ ]]; then
+          if [[ ! "$TAG" =~ ^latest-edge-r[1-9][0-9]*-r[1-9][0-9]*-r[1-9][0-9]*$ ]]; then
             echo "Invalid release tag: $TAG" >&2
             exit 1
           fi
@@ -226,3 +277,4 @@ jobs:
           files: |
             ./alloy-sub_ubuntu@22.04-amd64.charm
             ./alloy-sub_ubuntu@24.04-amd64.charm
+            ./alloy-sub_ubuntu@26.04-amd64.charm

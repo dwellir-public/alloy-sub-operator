@@ -40,6 +40,7 @@ def test_workflows_declare_least_privilege_permissions():
     assert release["permissions"] == {"contents": "read"}
     assert release["jobs"]["build-ubuntu-22"]["permissions"] == {"contents": "read"}
     assert release["jobs"]["build-ubuntu-24"]["permissions"] == {"contents": "read"}
+    assert release["jobs"]["build-ubuntu-26"]["permissions"] == {"contents": "read"}
     assert release["jobs"]["release"]["permissions"] == {"actions": "read", "contents": "read"}
     assert release["jobs"]["github-release"]["permissions"] == {
         "actions": "read",
@@ -54,12 +55,13 @@ def test_release_is_manual_main_only_and_publish_jobs_depend_on_gated_builds():
     jobs = workflow["jobs"]
     assert jobs["build-ubuntu-22"]["if"] == "github.ref == 'refs/heads/main'"
     assert jobs["build-ubuntu-24"]["if"] == "github.ref == 'refs/heads/main'"
-    assert jobs["release"]["needs"] == ["build-ubuntu-22", "build-ubuntu-24"]
+    assert jobs["build-ubuntu-26"]["if"] == "github.ref == 'refs/heads/main'"
+    assert jobs["release"]["needs"] == ["build-ubuntu-22", "build-ubuntu-24", "build-ubuntu-26"]
     assert jobs["github-release"]["needs"] == ["release"]
     assert "always()" not in RELEASE_WORKFLOW.read_text()
 
 
-def test_release_serializes_complete_latest_edge_revision_pairs():
+def test_release_serializes_complete_latest_edge_revision_sets():
     workflow = _workflow(RELEASE_WORKFLOW)
 
     assert workflow["concurrency"] == {
@@ -69,22 +71,23 @@ def test_release_serializes_complete_latest_edge_revision_pairs():
     assert all("concurrency" not in job for job in workflow["jobs"].values())
 
 
-def test_release_preserves_two_base_artifacts_and_publishes_only_latest_edge():
+def test_release_preserves_every_base_artifact_and_publishes_only_latest_edge():
     text = RELEASE_WORKFLOW.read_text()
 
     assert "./alloy-sub_ubuntu@22.04-amd64.charm" in text
     assert "./alloy-sub_ubuntu@24.04-amd64.charm" in text
+    assert "./alloy-sub_ubuntu@26.04-amd64.charm" in text
     release_commands = re.findall(r"^\s*[^#\n]*charmcraft\s+(?:upload|release)[^\n]*$", text, re.MULTILINE)
-    assert len(release_commands) == 2
+    assert len(release_commands) == 3
     assert all("upload" in command and "--release latest/edge" in command for command in release_commands)
     assert not any(re.search(r"latest/(?:candidate|stable)", command) for command in release_commands)
 
 
-def test_both_charmhub_revision_outputs_are_positive_integers():
+def test_all_charmhub_revision_outputs_are_positive_integers():
     workflow = _workflow(RELEASE_WORKFLOW)
     release_steps = workflow["jobs"]["release"]["steps"]
 
-    for step_id in ("upload_ubuntu_22", "upload_ubuntu_24"):
+    for step_id in ("upload_ubuntu_22", "upload_ubuntu_24", "upload_ubuntu_26"):
         script = next(step["run"] for step in release_steps if step.get("id") == step_id)
         assert '[[ ! "$revision" =~ ^[1-9][0-9]*$ ]]' in script
 
@@ -95,15 +98,16 @@ def test_both_charmhub_revision_outputs_are_positive_integers():
         "CHANNEL": "${{ needs.release.outputs.release_channel }}",
         "REVISION_22": "${{ needs.release.outputs.rev_ubuntu_22 }}",
         "REVISION_24": "${{ needs.release.outputs.rev_ubuntu_24 }}",
+        "REVISION_26": "${{ needs.release.outputs.rev_ubuntu_26 }}",
     }
-    assert metadata_step["run"].count("=~ ^[1-9][0-9]*$") == 2
+    assert metadata_step["run"].count("=~ ^[1-9][0-9]*$") == 3
 
 
-def test_release_tag_uses_both_revisions_and_existing_tag_must_match_source_sha():
+def test_release_tag_uses_all_revisions_and_existing_tag_must_match_source_sha():
     workflow = _workflow(RELEASE_WORKFLOW)
     github_steps = workflow["jobs"]["github-release"]["steps"]
     metadata = next(step for step in github_steps if step.get("id") == "release_meta")
-    assert 'tag="latest-edge-r${REVISION_22}-r${REVISION_24}"' in metadata["run"]
+    assert 'tag="latest-edge-r${REVISION_22}-r${REVISION_24}-r${REVISION_26}"' in metadata["run"]
 
     provenance = next(step for step in github_steps if step["name"] == "Verify existing release tag provenance")
     assert provenance["env"] == {
@@ -114,6 +118,7 @@ def test_release_tag_uses_both_revisions_and_existing_tag_must_match_source_sha(
     assert "credential.helper=" in script
     assert "x-access-token" in script
     assert "git " in script and "ls-remote" in script
+    assert "^latest-edge-r[1-9][0-9]*-r[1-9][0-9]*-r[1-9][0-9]*$" in script
     assert 'tag_ref="refs/tags/${TAG}"' in script
     assert '"${tag_ref}^{}"' in script
     assert '"$existing_sha" != "$GITHUB_SHA"' in script
