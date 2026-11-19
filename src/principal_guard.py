@@ -26,7 +26,7 @@ def decode_principals(raw: str | None) -> frozenset[str]:
         return frozenset()
     try:
         value = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         return frozenset()
     if not isinstance(value, list):
         return frozenset()

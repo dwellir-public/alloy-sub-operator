@@ -33,7 +33,7 @@ def test_decode_round_trips():
 
 @pytest.mark.parametrize(
     "raw",
-    [None, "", "not json", "{}", '"polkadot"', "[1, null]", '[""]', "[[]]"],
+    [None, "", "not json", "{}", '"polkadot"', "[1, null]", '[""]', "[[]]", "[" * 100000],
 )
 def test_decode_ignores_malformed_values(raw):
     assert decode_principals(raw) == frozenset()
