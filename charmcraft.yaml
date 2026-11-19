@@ -8,6 +8,9 @@ description: |
   workload-local metrics, captures journald and file logs, and forwards telemetry
   to Loki and Prometheus-compatible remote write backends.
 
+  One alloy-sub application serves one principal application; deploy the charm
+  again under another application name for each further principal.
+
 platforms:
   ubuntu@22.04:amd64:
   ubuntu@24.04:amd64:
@@ -120,10 +123,12 @@ requires:
   juju-info:
     interface: juju-info
     scope: container
+    limit: 1
   machine-observability:
     interface: machine_observability
     scope: container
     optional: true
+    limit: 1
   send-loki-logs:
     interface: loki_push_api
     optional: true
@@ -137,6 +142,7 @@ requires:
     interface: pprof_scrape
     scope: container
     optional: true
+    limit: 1
     description: pprof targets the principal publishes for Alloy to pull.
   send-profiles:
     interface: profiling
@@ -146,6 +152,10 @@ requires:
       Pyroscope to push profiles to, using Pyroscope's native ingest on the advertised
       host:port. Relate to pyroscope-vm:profiling. Not compatible with OTLP-only receivers
       such as opentelemetry-collector:receive-profiles.
+
+peers:
+  alloy-peers:
+    interface: alloy_sub_peers
 
 parts:
   cos-tool:

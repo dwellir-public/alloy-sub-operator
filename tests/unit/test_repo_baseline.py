@@ -101,3 +101,19 @@ def test_readme_documents_profiling():
 
     assert "## Profiling" in readme
     assert "profiling-source" in readme
+
+
+def test_principal_facing_endpoints_are_limited_to_one_principal():
+    """Juju only refuses a second principal application when limit is declared."""
+    import yaml
+
+    metadata = yaml.safe_load(Path("charmcraft.yaml").read_text())
+    requires = metadata["requires"]
+
+    for endpoint in ("juju-info", "machine-observability", "profiling-source"):
+        assert requires[endpoint]["scope"] == "container"
+        assert requires[endpoint]["limit"] == 1
+    for endpoint in ("send-loki-logs", "send-remote-write", "grafana-cloud-config"):
+        assert "limit" not in requires[endpoint]
+    assert requires["send-profiles"]["limit"] == 1
+    assert metadata["peers"] == {"alloy-peers": {"interface": "alloy_sub_peers"}}
