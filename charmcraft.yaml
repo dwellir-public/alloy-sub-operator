@@ -123,9 +123,14 @@ actions:
   adopt-alloy:
     description: |
       Take ownership of an Alloy that is already installed on this machine from
-      the alloy deb package and is not managed by another unit. The existing
-      config is preserved next to the generated one and is replaced by the
-      charm-rendered config; Alloy is restarted once.
+      the alloy deb package and is not managed by another unit. The installed
+      version is kept. The existing config is preserved at
+      /etc/alloy/config.alloy.package-default, and Alloy keeps running on that
+      config until the unit has its relations. On the first reconcile with
+      relations the charm writes its rendered config and restarts Alloy; from
+      then on, anything the old config collected that the charm does not render
+      stops being collected. The charm restores the preserved config whenever
+      the unit has no relations.
     params:
       force:
         type: boolean
