@@ -32,6 +32,7 @@ show_missing = true
 [tool.pytest.ini_options]
 minversion = "6.0"
 log_cli_level = "INFO"
+markers = ["real_ownership: run with the real Alloy ownership gate"]
 
 [tool.ruff]
 line-length = 120

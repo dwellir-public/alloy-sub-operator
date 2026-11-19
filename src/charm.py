@@ -35,7 +35,7 @@ try:
     )
     from charms.pyroscope_coordinator_k8s.v0.profiling import ProfilingEndpointRequirer
 
-    from . import alloy
+    from . import alloy, alloy_ownership
     from .alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
     from .config_builder import (
         DEFAULT_CONFIG_PATH,
@@ -78,6 +78,7 @@ except ImportError:
     from charms.pyroscope_coordinator_k8s.v0.profiling import ProfilingEndpointRequirer
 
     import alloy
+    import alloy_ownership
     from alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
     from config_builder import (
         DEFAULT_CONFIG_PATH,
@@ -265,7 +266,15 @@ class AlloySubCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
-        self._stored.set_default(last_good_config="", last_custom_args="")
+        self._stored.set_default(
+            last_good_config="",
+            last_custom_args="",
+            ownership_evaluated=False,
+            alloy_installed=False,
+        )
+        # Read once per dispatch: re-emitted deferred events run the gate before
+        # upgrade-charm does and would otherwise hide that this unit predates the marker.
+        self._predates_ownership_marker = not self._stored.ownership_evaluated
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
         self.pprof_sources = PprofScrapeRequirer(self, relation_name="profiling-source")
         self._rule_validator = CosToolRuleValidator()
@@ -306,19 +315,58 @@ class AlloySubCharm(ops.CharmBase):
         for event in ("relation_joined", "relation_changed", "relation_departed"):
             self.framework.observe(getattr(self.on[PEER_RELATION], event), self._on_relation_event)
 
-    def _on_install(self, event: ops.InstallEvent) -> None:
+    def _claim_alloy(self, *, allow_existing: bool = False, force: bool = False) -> alloy_ownership.Claim:
+        """Try to claim the machine's Alloy for this unit and remember that ownership was evaluated."""
+        result = alloy_ownership.claim(
+            self.unit.name,
+            installed=alloy.installation() != "none",
+            allow_existing=allow_existing,
+            force=force,
+        )
+        self._stored.ownership_evaluated = True
+        return result
+
+    def _ensure_alloy_ownership(self, *, allow_existing: bool = False) -> bool:
+        """Return whether this unit owns the machine's Alloy, installing it on first ownership.
+
+        A unit that does not own Alloy is blocked and must not touch the service.
+        """
+        result = self._claim_alloy(allow_existing=allow_existing)
+        if result.state == "other":
+            self.unit.status = ops.BlockedStatus(
+                f"Alloy on this machine is managed by {result.owner}; remove this unit's principal relation"
+            )
+            return False
+        if result.state != "owned":
+            self.unit.status = ops.BlockedStatus("unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy")
+            return False
+        if not self._stored.alloy_installed:
+            if alloy.installation() == "none":
+                self._install_alloy()
+            else:
+                self._stored.alloy_installed = True
+        return True
+
+    def _install_alloy(self) -> None:
         """Install Alloy and preserve the package-provided config."""
+        alloy.install()
+        alloy.preserve_default_config(config_path=Path(DEFAULT_CONFIG_PATH))
+        alloy.write_custom_args(self._desired_custom_args())
+        self._stored.alloy_installed = True
+
+    def _on_install(self, event: ops.InstallEvent) -> None:
+        """Claim the machine's Alloy and install it when this unit owns it."""
         self.unit.status = ops.MaintenanceStatus("Installing Alloy")
         try:
-            alloy.install()
-            alloy.preserve_default_config(config_path=Path(DEFAULT_CONFIG_PATH))
-            alloy.write_custom_args(self._desired_custom_args())
+            self._ensure_alloy_ownership()
         except Exception as exc:  # noqa: BLE001
             self.unit.status = ops.BlockedStatus(f"Installation failed: {exc}")
             event.defer()
 
     def _on_start(self, event: ops.StartEvent) -> None:
         """Start the workload and configure it if relation data is present."""
+        if not self._ensure_alloy_ownership():
+            return
         try:
             alloy.start()
             version = alloy.get_version()
@@ -332,12 +380,16 @@ class AlloySubCharm(ops.CharmBase):
             self._reconcile_rule_groups(event)
 
     def _on_stop(self, _: ops.StopEvent) -> None:
-        """Stop the workload."""
+        """Release the machine's Alloy and stop it, only when this unit owned it."""
+        if not alloy_ownership.release(self.unit.name):
+            return
         alloy.stop()
         self.unit.status = ops.ActiveStatus("Alloy stopped")
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent) -> None:
         """Rewrite and apply config after charm config changes."""
+        if not self._ensure_alloy_ownership():
+            return
         try:
             self._configure(active_message="Alloy config updated")
         except Exception as exc:  # noqa: BLE001
@@ -348,6 +400,8 @@ class AlloySubCharm(ops.CharmBase):
 
     def _on_update_status(self, event: ops.UpdateStatusEvent) -> None:
         """Reconcile config and workload health during periodic status updates."""
+        if not self._ensure_alloy_ownership():
+            return
         try:
             version = alloy.get_version()
             if version:
@@ -367,8 +421,13 @@ class AlloySubCharm(ops.CharmBase):
         self._reconcile_config(event)
 
     def _on_upgrade_charm(self, event: ops.UpgradeCharmEvent) -> None:
-        """Reconcile config after charm upgrade."""
-        self._reconcile_config(event)
+        """Reconcile config after charm upgrade.
+
+        A unit that never evaluated ownership predates the marker and runs the
+        machine's Alloy, so it may claim an installation it finds.
+        """
+        if self._ensure_alloy_ownership(allow_existing=self._predates_ownership_marker):
+            self._reconcile_config(event)
 
     def _on_relation_event(self, event: ops.RelationEvent) -> None:
         """Re-render config when principal relations change."""
@@ -380,6 +439,8 @@ class AlloySubCharm(ops.CharmBase):
         Relation events may be deferred on transient failures; other event types
         are reconciled immediately without assuming defer support.
         """
+        if not self._ensure_alloy_ownership():
+            return
         try:
             self._configure(active_message="Alloy config updated")
         except Exception as exc:  # noqa: BLE001
