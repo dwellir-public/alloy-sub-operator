@@ -76,6 +76,58 @@ async def test_build_deploy_and_integrate_with_principal(ops_test: OpsTest):
     assert 'prometheus.scrape "polkadot"' in action[1]
 
 
+SPLIT_APP_NAME = "alloy-sub-split"
+
+
+@pytest.mark.abort_on_fail
+@pytest.mark.skipif(not POLKADOT_CHARM_PATH, reason="POLKADOT_CHARM_PATH not set")
+async def test_second_principal_is_rejected_on_limited_endpoints(ops_test: OpsTest):
+    """Juju refuses a second principal application on a limit: 1 endpoint."""
+    await ops_test.model.deploy("ubuntu", application_name="second-principal", channel="latest/stable")
+
+    # Juju 3.6 exits non-zero without printing the reason unless --debug is given.
+    return_code, stdout, stderr = await ops_test.juju(
+        "integrate", "--debug", f"{APP_NAME}:juju-info", "second-principal:juju-info"
+    )
+
+    assert return_code != 0, stdout
+    assert "maximum relation limit of 1" in stderr
+
+
+@pytest.mark.abort_on_fail
+@pytest.mark.skipif(not POLKADOT_CHARM_PATH, reason="POLKADOT_CHARM_PATH not set")
+async def test_split_principals_block_every_unit(ops_test: OpsTest):
+    """juju-info to one principal and machine-observability to another blocks all units."""
+    alloy_sub = await ops_test.build_charm(".")
+    await ops_test.model.deploy(alloy_sub, application_name=SPLIT_APP_NAME)
+    await ops_test.model.integrate(f"{SPLIT_APP_NAME}:juju-info", "second-principal:juju-info")
+    await ops_test.model.integrate(f"{SPLIT_APP_NAME}:machine-observability", "polkadot:machine-observability")
+
+    expected = "multiple principal applications: polkadot, second-principal; relate alloy-sub to one principal"
+    await ops_test.model.block_until(
+        lambda: (
+            len(ops_test.model.applications[SPLIT_APP_NAME].units) == 2
+            and all(
+                unit.workload_status == "blocked" and expected in unit.workload_status_message
+                for unit in ops_test.model.applications[SPLIT_APP_NAME].units
+            )
+        ),
+        timeout=900,
+    )
+
+    await ops_test.juju("remove-relation", f"{SPLIT_APP_NAME}:machine-observability", "polkadot:machine-observability")
+    await ops_test.model.block_until(
+        lambda: (
+            len(ops_test.model.applications[SPLIT_APP_NAME].units) == 1
+            and all(unit.workload_status != "blocked" for unit in ops_test.model.applications[SPLIT_APP_NAME].units)
+        ),
+        timeout=900,
+    )
+
+    await ops_test.model.remove_application(SPLIT_APP_NAME, block_until_done=True)
+    await ops_test.model.remove_application("second-principal", block_until_done=True)
+
+
 GOTODO_CHARM_PATH = os.environ.get("GOTODO_CHARM_PATH")
 PYROSCOPE_CHARM_PATH = os.environ.get("PYROSCOPE_CHARM_PATH")
 

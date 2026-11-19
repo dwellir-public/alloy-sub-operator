@@ -94,8 +94,11 @@ One `alloy-sub` application serves exactly one principal application. The
 declare `limit: 1`, so Juju rejects a second relation on any of them:
 
 ```text
-ERROR cannot add relation "alloy-sub:juju-info other:juju-info": establishing a new relation for alloy-sub:juju-info would exceed its maximum relation limit of 1
+ERROR cannot add relation "alloy-sub:juju-info other:juju-info": establishing a new relation for alloy-sub:juju-info would exceed its maximum relation limit of 1 (quota limit exceeded)
 ```
+
+Juju 3.6 prints that message only with `juju integrate --debug`; without it the
+command exits non-zero and adds no relation.
 
 The limit counts relations, not units: the one principal application can have
 any number of units, and each gets its own `alloy-sub` unit. To observe another
