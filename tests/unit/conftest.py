@@ -25,4 +25,5 @@ def alloy_marker_dir(request, tmp_path, monkeypatch):
         for charm_module in {charm, sys.modules.get("src.charm")} - {None}:
             monkeypatch.setattr(charm_module.AlloySubCharm, "_ensure_alloy_ownership", lambda self, **_kwargs: True)
             monkeypatch.setattr(charm_module.alloy_ownership, "release", lambda *_args, **_kwargs: True)
+            monkeypatch.setattr(charm_module.AlloySubCharm, "_owns_alloy", lambda self: True)
     return tmp_path / "juju-alloy"

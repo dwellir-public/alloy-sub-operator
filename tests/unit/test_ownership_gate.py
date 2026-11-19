@@ -3,6 +3,7 @@
 
 """The charm refuses to touch an Alloy installation this unit does not own."""
 
+import dataclasses
 import json
 from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
@@ -65,20 +66,30 @@ def _relations():
     ]
 
 
-def _run(event, state, *, installation, install_error=None):
-    """Run one hook with every Alloy call mocked; return (state_out, mocks by name)."""
+def _run(event, state, *, installation, install_error=None, stop_error=None):
+    """Run one hook with every Alloy call mocked; return (state_out, mocks by name).
+
+    ``mocks["calls"]`` records the mutating calls in order.
+    """
     ctx = testing.Context(AlloySubCharm)
     resolved = event(ctx) if callable(event) else getattr(ctx.on, event)()
-    mocks = {}
+    mocks = {"calls": MagicMock()}
     with ExitStack() as stack:
         stack.enter_context(patch("charm.alloy.installation", return_value=installation))
         for name in (*MUTATING, *_SIDE_EFFECT_FREE):
             mocks[name] = stack.enter_context(patch(f"charm.alloy.{name}", new=MagicMock()))
         for name, value in _RETURNS.items():
             mocks[name] = stack.enter_context(patch(f"charm.alloy.{name}", return_value=value))
+        for name in MUTATING:
+            mocks["calls"].attach_mock(mocks[name], name)
         mocks["install"].side_effect = install_error
+        mocks["stop"].side_effect = stop_error
         state_out = ctx.run(resolved, state)
     return state_out, mocks
+
+
+def _call_names(mocks):
+    return [call[0] for call in mocks["calls"].mock_calls]
 
 
 def _stored(**content):
@@ -103,9 +114,10 @@ def _assert_untouched(mocks):
 def test_install_claims_and_installs_on_a_clean_machine(alloy_marker_dir):
     state_out, mocks = _run("install", testing.State(), installation="none")
 
-    mocks["install"].assert_called_once()
+    assert _call_names(mocks) == ["install", "preserve_default_config", "write_custom_args"]
+    mocks["start"].assert_not_called()
     assert alloy_ownership.current_owner() == "alloy-sub/0"
-    assert not isinstance(state_out.unit_status, testing.BlockedStatus)
+    assert state_out.unit_status == testing.MaintenanceStatus("Installing Alloy")
 
 
 @pytest.mark.parametrize("event_name", ["install", "start", "config_changed", "update_status", "upgrade_charm"])
@@ -222,24 +234,41 @@ def test_blocked_unit_installs_once_the_owner_releases(alloy_marker_dir):
     state_out, mocks = _run("update_status", blocked, installation="none")
 
     mocks["install"].assert_called_once()
+    mocks["start"].assert_called_once()
+    assert _call_names(mocks)[:4] == ["install", "preserve_default_config", "write_custom_args", "start"]
     assert alloy_ownership.current_owner() == "alloy-sub/0"
     assert not isinstance(state_out.unit_status, testing.BlockedStatus)
 
 
 def test_owner_stop_stops_alloy_and_releases(alloy_marker_dir):
     owned, _ = _run("install", testing.State(), installation="none")
-    _, mocks = _run("stop", owned, installation="package")
+    state_out, mocks = _run("stop", owned, installation="package")
 
     mocks["stop"].assert_called_once()
     assert alloy_ownership.current_owner() is None
+    assert state_out.unit_status == testing.ActiveStatus("Alloy stopped")
+
+
+def test_failed_stop_keeps_the_marker_so_the_retry_stops_and_releases(alloy_marker_dir):
+    owned, _ = _run("install", testing.State(), installation="none")
+    with pytest.raises(testing.errors.UncaughtCharmError):
+        _run("stop", owned, installation="package", stop_error=OSError("systemctl failed"))
+    assert alloy_ownership.current_owner() == "alloy-sub/0"
+
+    state_out, mocks = _run("stop", owned, installation="package")
+
+    mocks["stop"].assert_called_once()
+    assert alloy_ownership.current_owner() is None
+    assert state_out.unit_status == testing.ActiveStatus("Alloy stopped")
 
 
 def test_non_owner_stop_leaves_alloy_and_marker_alone(alloy_marker_dir):
     alloy_ownership.claim("other-sub/3", installed=False)
-    _, mocks = _run("stop", testing.State(), installation="package")
+    state_out, mocks = _run("stop", testing.State(), installation="package")
 
     mocks["stop"].assert_not_called()
     assert alloy_ownership.current_owner() == "other-sub/3"
+    assert state_out.unit_status == testing.UnknownStatus()
 
 
 def test_claim_failure_blocks_without_failing_the_hook(alloy_marker_dir):
@@ -266,9 +295,56 @@ def test_install_failure_blocks_defers_keeps_the_marker_and_retries(alloy_marker
     assert not isinstance(state_out.unit_status, testing.BlockedStatus)
 
 
+def test_interrupted_install_is_finished_even_when_alloy_is_detected(alloy_marker_dir):
+    failed, _ = _run(
+        "install", testing.State(relations=_relations()), installation="none", install_error=OSError("apt down")
+    )
+
+    # The half-finished apt install now shows up as a package.
+    state_out, mocks = _run("update_status", failed, installation="package")
+
+    mocks["install"].assert_called_once()
+    mocks["preserve_default_config"].assert_called_once()
+    assert _call_names(mocks)[:3] == ["install", "preserve_default_config", "write_custom_args"]
+    # The replayed install retries after the start hook may already have run, so it starts Alloy.
+    mocks["start"].assert_called_once()
+    assert not isinstance(state_out.unit_status, testing.BlockedStatus)
+    assert state_out.deferred == []
+
+
+def test_install_is_attempted_once_per_dispatch(alloy_marker_dir):
+    failed, _ = _run(
+        "install", testing.State(relations=_relations()), installation="none", install_error=OSError("apt down")
+    )
+    assert [deferred.name for deferred in failed.deferred] == ["install"]
+
+    # The deferred install replays first and fails again; update-status must not retry it.
+    state_out, mocks = _run("update_status", failed, installation="package", install_error=OSError("apt still down"))
+
+    mocks["install"].assert_called_once()
+    assert state_out.unit_status == testing.BlockedStatus("Installation failed: apt still down")
+    assert [deferred.name for deferred in state_out.deferred] == ["install"]
+    assert _call_names(mocks) == ["install"]
+
+
+def test_adopt_finishes_an_interrupted_install(alloy_marker_dir):
+    failed, _ = _run(
+        "install", testing.State(relations=_relations()), installation="none", install_error=OSError("apt down")
+    )
+    # Drop the deferred install so only the action's own install path runs.
+    state_out, mocks = _run_action(dataclasses.replace(failed, deferred=[]), installation="other")
+
+    assert _call_names(mocks)[:4] == ["install", "preserve_default_config", "write_custom_args", "start"]
+    assert alloy_ownership.current_owner() == "alloy-sub/0"
+    assert isinstance(state_out.unit_status, testing.ActiveStatus)
+
+
 def test_late_install_failure_blocks_without_failing_or_deferring_the_hook(alloy_marker_dir):
     state_out, mocks = _run(
-        "update_status", testing.State(relations=_relations()), installation="none", install_error=OSError("apt down")
+        "update_status",
+        testing.State(relations=_relations(), stored_states=[_installed_here()]),
+        installation="none",
+        install_error=OSError("apt down"),
     )
 
     assert state_out.unit_status == testing.BlockedStatus("Installation failed: apt down")
@@ -332,13 +408,15 @@ def test_blocked_leader_still_publishes_alert_rules(alloy_marker_dir, monkeypatc
 def _run_action(state, *, installation, params=None):
     """Run the adopt-alloy action with every Alloy call mocked; return (state_out, mocks)."""
     ctx = testing.Context(AlloySubCharm)
-    mocks = {}
+    mocks = {"calls": MagicMock()}
     with ExitStack() as stack:
         stack.enter_context(patch("charm.alloy.installation", return_value=installation))
         for name in (*MUTATING, *_SIDE_EFFECT_FREE):
             mocks[name] = stack.enter_context(patch(f"charm.alloy.{name}", new=MagicMock()))
         for name, value in _RETURNS.items():
             mocks[name] = stack.enter_context(patch(f"charm.alloy.{name}", return_value=value))
+        for name in MUTATING:
+            mocks["calls"].attach_mock(mocks[name], name)
         state_out = ctx.run(ctx.on.action("adopt-alloy", params={"force": False, **(params or {})}), state)
     _run_action.last_context = ctx
     return state_out, mocks

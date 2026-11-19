@@ -273,8 +273,10 @@ class AlloySubCharm(ops.CharmBase):
             last_custom_args="",
             install_hook_seen=False,
             alloy_installed=False,
+            install_pending=False,
         )
         self._install_failed = False
+        self._install_error: Exception | None = None
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
         self.pprof_sources = PprofScrapeRequirer(self, relation_name="profiling-source")
         self._rule_validator = CosToolRuleValidator()
@@ -325,7 +327,7 @@ class AlloySubCharm(ops.CharmBase):
             force=force,
         )
 
-    def _ensure_alloy_ownership(self) -> bool:
+    def _ensure_alloy_ownership(self, *, start_after_install: bool = True) -> bool:
         """Return whether this unit owns the machine's Alloy, installing it on first ownership.
 
         A unit that does not own Alloy, or cannot tell, is blocked and must not
@@ -348,43 +350,63 @@ class AlloySubCharm(ops.CharmBase):
         if result.state != "owned":
             self.unit.status = ops.BlockedStatus("unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy")
             return False
-        return self._ensure_alloy_installed()
+        return self._ensure_alloy_installed(start_after_install=start_after_install)
 
-    def _ensure_alloy_installed(self) -> bool:
+    def _ensure_alloy_installed(self, *, start_after_install: bool) -> bool:
         """Install Alloy once this unit owns it; block and report False when that fails.
 
-        The marker stays claimed and ``alloy_installed`` stays false, so the next hook retries.
+        The marker stays claimed and ``alloy_installed`` stays false, so the next
+        hook retries; within one dispatch the install is attempted only once.
         """
         if self._stored.alloy_installed:
             return True
+        if self._install_error is not None:
+            return self._block_on_install_failure(self._install_error)
         try:
-            if alloy.installation() == "none":
+            if self._install_needed():
                 self._install_alloy()
+                if start_after_install:
+                    alloy.start()
             else:
                 self._stored.alloy_installed = True
         except Exception as exc:  # noqa: BLE001
             logger.warning("Alloy installation failed: %s", exc)
-            self.unit.status = ops.BlockedStatus(f"Installation failed: {exc}")
-            self._install_failed = True
-            return False
+            self._install_error = exc
+            return self._block_on_install_failure(exc)
         return True
 
+    def _block_on_install_failure(self, exc: Exception) -> bool:
+        """Block the unit on a failed install and report that the gate is closed."""
+        self.unit.status = ops.BlockedStatus(f"Installation failed: {exc}")
+        self._install_failed = True
+        return False
+
+    def _install_needed(self) -> bool:
+        """Return whether Alloy is absent or an earlier install by this unit did not finish."""
+        return bool(self._stored.install_pending) or alloy.installation() == "none"
+
     def _install_alloy(self) -> None:
-        """Install Alloy and preserve the package-provided config."""
+        """Install Alloy and preserve the package-provided config.
+
+        ``install_pending`` stays set until all three steps finish, so an interrupted
+        install is repeated even when the probe already detects Alloy.
+        """
+        self._stored.install_pending = True
         alloy.install()
         alloy.preserve_default_config(config_path=Path(DEFAULT_CONFIG_PATH))
         alloy.write_custom_args(self._desired_custom_args())
+        self._stored.install_pending = False
         self._stored.alloy_installed = True
 
     def _on_adopt_alloy_action(self, event: ops.ActionEvent) -> None:
         """Hand an unmanaged, deb-package Alloy to this unit."""
-        if alloy.installation() == "other":
+        if alloy.installation() == "other" and not self._stored.install_pending:
             event.fail(
                 "Alloy on this machine was not installed from the alloy deb package and cannot be adopted; uninstall it"
             )
             return
         try:
-            claim = self._claim_alloy(allow_existing=True, force=bool(event.params["force"]))
+            claim = self._claim_alloy(allow_existing=True, force=bool(event.params.get("force", False)))
         except Exception as exc:  # noqa: BLE001
             logger.warning("Alloy ownership check failed: %s", exc)
             event.fail(f"Alloy ownership check failed: {exc}")
@@ -394,7 +416,12 @@ class AlloySubCharm(ops.CharmBase):
                 f"Alloy on this machine is managed by {claim.owner}; pass force=true only if that unit no longer exists"
             )
             return
-        self._adopt_installed_alloy()
+        try:
+            self._adopt_installed_alloy()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Alloy installation failed: %s", exc)
+            event.fail(f"Installation failed: {exc}")
+            return
         alloy.start()
         self._configure(active_message="Alloy adopted")
         event.set_results(
@@ -407,7 +434,7 @@ class AlloySubCharm(ops.CharmBase):
 
     def _adopt_installed_alloy(self) -> None:
         """Install Alloy when absent, otherwise preserve its config and apply the charm's custom args."""
-        if alloy.installation() == "none":
+        if self._install_needed():
             self._install_alloy()
             return
         alloy.preserve_default_config(config_path=Path(DEFAULT_CONFIG_PATH))
@@ -418,7 +445,10 @@ class AlloySubCharm(ops.CharmBase):
         """Claim the machine's Alloy and install it when this unit owns it."""
         self._stored.install_hook_seen = True
         self.unit.status = ops.MaintenanceStatus("Installing Alloy")
-        if not self._ensure_alloy_ownership() and self._install_failed:
+        # The original install is followed by the start hook; a replayed install
+        # retrying a failed one may run after start already did, so it starts Alloy.
+        retrying = bool(self._stored.install_pending)
+        if not self._ensure_alloy_ownership(start_after_install=retrying) and self._install_failed:
             event.defer()
 
     def _on_start(self, event: ops.StartEvent) -> None:
@@ -437,11 +467,19 @@ class AlloySubCharm(ops.CharmBase):
         finally:
             self._reconcile_rule_groups(event)
 
+    def _owns_alloy(self) -> bool:
+        """Return whether the machine's ownership marker names this unit."""
+        return alloy_ownership.current_owner() == self.unit.name
+
     def _on_stop(self, _: ops.StopEvent) -> None:
-        """Release the machine's Alloy and stop it, only when this unit owned it."""
-        if not alloy_ownership.release(self.unit.name):
+        """Stop the machine's Alloy and then release it, only when this unit owns it.
+
+        Releasing last keeps the marker held if stopping fails, so Juju's retry stops it.
+        """
+        if not self._owns_alloy():
             return
         alloy.stop()
+        alloy_ownership.release(self.unit.name)
         self.unit.status = ops.ActiveStatus("Alloy stopped")
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent) -> None:

@@ -80,11 +80,15 @@ def test_release_by_non_owner_changes_nothing(tmp_path):
 
 def test_simultaneous_first_claims_have_one_winner(tmp_path):
     results = []
+    errors = []
     barrier = threading.Barrier(8)
 
     def contend(index):
-        barrier.wait()
-        results.append(claim(f"alloy-sub/{index}", installed=False, marker_dir=tmp_path))
+        try:
+            barrier.wait()
+            results.append(claim(f"alloy-sub/{index}", installed=False, marker_dir=tmp_path))
+        except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion below
+            errors.append(exc)
 
     threads = [threading.Thread(target=contend, args=(i,)) for i in range(8)]
     for thread in threads:
@@ -92,6 +96,8 @@ def test_simultaneous_first_claims_have_one_winner(tmp_path):
     for thread in threads:
         thread.join()
 
+    assert errors == []
+    assert len(results) == 8
     winners = [result for result in results if result.state == "owned"]
     assert len(winners) == 1
     assert all(result == Claim("other", winners[0].owner) for result in results if result.state != "owned")
