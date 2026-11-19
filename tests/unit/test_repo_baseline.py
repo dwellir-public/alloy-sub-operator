@@ -211,8 +211,8 @@ def test_readme_warns_that_alloy_vm_records_no_ownership():
     readme = Path("README.md").read_text()
 
     section = _flat(readme.split("## One Alloy per machine")[1].split("\n## ")[0])
-    assert "`alloy-vm` does not record ownership" in section
-    assert "Never run `adopt-alloy` on a machine where `alloy-vm` runs" in section
+    assert "An older `alloy-vm` revision records no" in section
+    assert "Never run `adopt-alloy` on a machine where an `alloy-vm`" in section
     assert "an `alloy-sub` unit on an older revision that has not been refreshed yet" in section
     assert "refresh it first; do not adopt" in section
 

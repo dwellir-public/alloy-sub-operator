@@ -164,14 +164,17 @@ For several workloads on one machine, use one `alloy-vm` principal related to
 every colocated workload over `machine-observability`, not one `alloy-sub` per
 workload.
 
-`alloy-vm` does not record ownership, so `alloy-sub` cannot tell an Alloy that
-`alloy-vm` manages from a manual install. Never run `adopt-alloy` on a machine
-where `alloy-vm` runs, and do not put both on one machine.
+`alloy-vm` uses the same ownership marker from the revision that adds its own
+`adopt-alloy` action; a unit of either charm then blocks, naming the owner, on
+a machine the other one manages. An older `alloy-vm` revision records no
+ownership, so `alloy-sub` cannot tell its Alloy from a manual install: refresh
+that `alloy-vm` first. Never run `adopt-alloy` on a machine where an `alloy-vm`
+unit runs.
 
 | Status | Meaning | What to do |
 | --- | --- | --- |
 | `Alloy on this machine is managed by <unit>; remove this unit's principal relation` | Another unit already owns Alloy here. | Remove this unit's relation, or the other unit's. The remaining unit takes over within one `update-status` interval. |
-| `unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy` | Alloy is installed but no unit owns it: a manual install, one managed by `alloy-vm`, or an `alloy-sub` unit on an older revision that has not been refreshed yet. | If `alloy-vm` manages it, remove this unit's relation. If an older `alloy-sub` unit runs here, refresh it first; do not adopt. Otherwise adopt or uninstall it, below. |
+| `unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy` | Alloy is installed but no unit owns it: a manual install, or an `alloy-vm` or `alloy-sub` unit on an older revision that has not been refreshed yet. | If an older `alloy-vm` or `alloy-sub` unit runs here, refresh it first; do not adopt. Otherwise adopt or uninstall it, below. |
 
 ### Adopting a manually installed Alloy
 
