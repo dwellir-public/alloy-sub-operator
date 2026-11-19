@@ -22,6 +22,7 @@ def test_charmcraft_uses_uv_baseline():
     assert "- astral-uv" in charmcraft
     assert "ubuntu@22.04:amd64:" in charmcraft
     assert "ubuntu@24.04:amd64:" in charmcraft
+    assert "ubuntu@26.04:amd64:" in charmcraft
 
 
 def test_charmcraft_declares_the_host_metrics_option():
