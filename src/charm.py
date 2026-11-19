@@ -275,6 +275,7 @@ class AlloySubCharm(ops.CharmBase):
         # Read once per dispatch: re-emitted deferred events run the gate before
         # upgrade-charm does and would otherwise hide that this unit predates the marker.
         self._predates_ownership_marker = not self._stored.ownership_evaluated
+        self._install_failed = False
         self.grafana_cloud = GrafanaCloudConfigRequirer(self)
         self.pprof_sources = PprofScrapeRequirer(self, relation_name="profiling-source")
         self._rule_validator = CosToolRuleValidator()
@@ -329,9 +330,16 @@ class AlloySubCharm(ops.CharmBase):
     def _ensure_alloy_ownership(self, *, allow_existing: bool = False) -> bool:
         """Return whether this unit owns the machine's Alloy, installing it on first ownership.
 
-        A unit that does not own Alloy is blocked and must not touch the service.
+        A unit that does not own Alloy, or cannot tell, is blocked and must not
+        touch the service. Failures block the unit instead of failing the hook.
         """
-        result = self._claim_alloy(allow_existing=allow_existing)
+        self._install_failed = False
+        try:
+            result = self._claim_alloy(allow_existing=allow_existing)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Alloy ownership check failed: %s", exc)
+            self.unit.status = ops.BlockedStatus(f"Alloy ownership check failed: {exc}")
+            return False
         if result.state == "other":
             self.unit.status = ops.BlockedStatus(
                 f"Alloy on this machine is managed by {result.owner}; remove this unit's principal relation"
@@ -340,11 +348,25 @@ class AlloySubCharm(ops.CharmBase):
         if result.state != "owned":
             self.unit.status = ops.BlockedStatus("unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy")
             return False
-        if not self._stored.alloy_installed:
+        return self._ensure_alloy_installed()
+
+    def _ensure_alloy_installed(self) -> bool:
+        """Install Alloy once this unit owns it; block and report False when that fails.
+
+        The marker stays claimed and ``alloy_installed`` stays false, so the next hook retries.
+        """
+        if self._stored.alloy_installed:
+            return True
+        try:
             if alloy.installation() == "none":
                 self._install_alloy()
             else:
                 self._stored.alloy_installed = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Alloy installation failed: %s", exc)
+            self.unit.status = ops.BlockedStatus(f"Installation failed: {exc}")
+            self._install_failed = True
+            return False
         return True
 
     def _install_alloy(self) -> None:
@@ -357,17 +379,14 @@ class AlloySubCharm(ops.CharmBase):
     def _on_install(self, event: ops.InstallEvent) -> None:
         """Claim the machine's Alloy and install it when this unit owns it."""
         self.unit.status = ops.MaintenanceStatus("Installing Alloy")
-        try:
-            self._ensure_alloy_ownership()
-        except Exception as exc:  # noqa: BLE001
-            self.unit.status = ops.BlockedStatus(f"Installation failed: {exc}")
+        if not self._ensure_alloy_ownership() and self._install_failed:
             event.defer()
 
     def _on_start(self, event: ops.StartEvent) -> None:
         """Start the workload and configure it if relation data is present."""
-        if not self._ensure_alloy_ownership():
-            return
         try:
+            if not self._ensure_alloy_ownership():
+                return
             alloy.start()
             version = alloy.get_version()
             if version:
@@ -388,9 +407,9 @@ class AlloySubCharm(ops.CharmBase):
 
     def _on_config_changed(self, event: ops.ConfigChangedEvent) -> None:
         """Rewrite and apply config after charm config changes."""
-        if not self._ensure_alloy_ownership():
-            return
         try:
+            if not self._ensure_alloy_ownership():
+                return
             self._configure(active_message="Alloy config updated")
         except Exception as exc:  # noqa: BLE001
             self.unit.status = ops.BlockedStatus(self._status_message(f"config invalid: {exc}"))
@@ -400,9 +419,9 @@ class AlloySubCharm(ops.CharmBase):
 
     def _on_update_status(self, event: ops.UpdateStatusEvent) -> None:
         """Reconcile config and workload health during periodic status updates."""
-        if not self._ensure_alloy_ownership():
-            return
         try:
+            if not self._ensure_alloy_ownership():
+                return
             version = alloy.get_version()
             if version:
                 self.unit.set_workload_version(version)
@@ -428,6 +447,8 @@ class AlloySubCharm(ops.CharmBase):
         """
         if self._ensure_alloy_ownership(allow_existing=self._predates_ownership_marker):
             self._reconcile_config(event)
+        else:
+            self._reconcile_rule_groups(event)
 
     def _on_relation_event(self, event: ops.RelationEvent) -> None:
         """Re-render config when principal relations change."""
@@ -439,9 +460,9 @@ class AlloySubCharm(ops.CharmBase):
         Relation events may be deferred on transient failures; other event types
         are reconciled immediately without assuming defer support.
         """
-        if not self._ensure_alloy_ownership():
-            return
         try:
+            if not self._ensure_alloy_ownership():
+                return
             self._configure(active_message="Alloy config updated")
         except Exception as exc:  # noqa: BLE001
             logger.warning("Relation-driven config update failed: %s", exc)
