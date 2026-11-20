@@ -141,13 +141,82 @@ juju relate alloy-sub-other:profiling-source other:profiling-source  # if it was
 juju refresh alloy-sub
 ```
 
-Wait for the old `alloy-sub` units to leave the moved principal's machines
-before relating `alloy-sub-other`. Two `alloy-sub` applications on one machine
-share a single Alloy service and config file, and the departing unit stops it.
+An old-revision `alloy-sub` unit leaves the Alloy package installed and
+records no owner. After the old `alloy-sub` units have left the moved
+principal's machines, each `alloy-sub-other` unit there reports
+`unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy` and
+stays blocked. Run `juju run alloy-sub-other/<n> adopt-alloy` on each of those
+units, or purge the package; see "One Alloy per machine". Do not run it while
+the old unit is still on the machine.
 
 Relate `alloy-sub-other` to the same Loki, remote-write, and Pyroscope
 applications as `alloy-sub` so the moved principal keeps forwarding telemetry
 and alert rules.
+
+## One Alloy per machine
+
+Alloy is one machine-wide service with one config file, so exactly one unit
+may manage it. The owning unit is recorded in
+`/var/lib/juju-alloy/owner.json`. A unit that does not own Alloy installs
+nothing, writes no config, and never starts or stops the service.
+
+For several workloads on one machine, use one `alloy-vm` principal related to
+every colocated workload over `machine-observability`, not one `alloy-sub` per
+workload.
+
+`alloy-vm` uses the same ownership marker from the revision that adds its own
+`adopt-alloy` action; a unit of either charm then blocks, naming the owner, on
+a machine the other one manages. An older `alloy-vm` revision records no
+ownership, so `alloy-sub` cannot tell its Alloy from a manual install: refresh
+that `alloy-vm` first. Never run `adopt-alloy` on a machine where an `alloy-vm`
+unit runs.
+
+| Status | Meaning | What to do |
+| --- | --- | --- |
+| `Alloy on this machine is managed by <unit>; remove this unit's principal relation` | Another unit already owns Alloy here. | Remove this unit's relation, or the other unit's. The remaining unit takes over within one `update-status` interval. |
+| `unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy` | Alloy is installed but no unit owns it: a manual install, or an `alloy-vm` or `alloy-sub` unit on an older revision that has not been refreshed yet. | If an older `alloy-vm` or `alloy-sub` unit runs here, refresh it first; do not adopt. Otherwise adopt or uninstall it, below. |
+
+### Adopting a manually installed Alloy
+
+```bash
+juju run alloy-sub/0 adopt-alloy
+```
+
+The unit takes ownership and keeps the installed version. Your existing
+`/etc/alloy/config.alloy` is preserved at
+`/etc/alloy/config.alloy.package-default`, and Alloy keeps running on that
+config until the unit has its relations. On the first reconcile with relations
+the charm writes its rendered config and restarts Alloy; from then on, anything
+your old config collected that the charm does not render stops being
+collected. The charm restores the preserved config whenever the unit has no
+relations. Only an Alloy installed from the `alloy` deb package can be adopted.
+
+To start clean instead, remove the package and let the unit install its own:
+
+```bash
+juju ssh alloy-sub/0 sudo apt-get purge alloy
+```
+
+### An owner that no longer exists
+
+If the owning unit was removed without running its hooks, the marker still
+names it. After checking with `juju status` that the unit is gone:
+
+```bash
+juju run alloy-sub/0 adopt-alloy force=true
+```
+
+Never force while the named unit exists: two managers overwrite each other.
+
+### Upgrading
+
+A unit that already runs Alloy claims ownership on its first hook after the refresh
+and keeps its service running. Where two `alloy-sub` units already share a machine,
+the first to upgrade keeps Alloy and the second blocks; remove the second one's
+relation. A new unit placed on a machine that an older-revision unit left behind
+reports `unmanaged Alloy found` and needs `adopt-alloy`. A unit from an older
+revision that was stuck failing its install when refreshed is treated as newly
+installed and may need `adopt-alloy`.
 
 ## Profiling
 

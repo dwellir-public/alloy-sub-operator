@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 try:
     from .config_builder import (
@@ -143,6 +143,31 @@ def custom_args_applied(custom_args: str) -> bool:
         return False
     required_tokens = shlex.split(custom_args)
     return all(token in argv for token in required_tokens)
+
+
+def _probe(cmd: list[str]) -> str | None:
+    """Run a read-only probe; return its stdout, or None when it answers no.
+
+    Only a command that ran and failed, or a tool that does not exist, means
+    no. A timeout or any other OS error propagates: the probe could not tell.
+    """
+    try:
+        return _run(cmd, timeout=DEFAULT_STATUS_TIMEOUT).stdout or ""
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def installation() -> Literal["none", "package", "other"]:
+    """Report how Alloy is installed: by the apt package, some other way, or not at all.
+
+    Raises ``subprocess.TimeoutExpired`` or ``OSError`` when a probe cannot answer.
+    """
+    status = _probe(["dpkg-query", "-W", "-f=${Status}", "alloy"])
+    if status is not None and status.strip() == "install ok installed":
+        return "package"
+    if shutil.which("alloy") or _probe(["systemctl", "cat", "alloy"]) is not None:
+        return "other"
+    return "none"
 
 
 def get_version() -> str | None:

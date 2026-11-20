@@ -32,6 +32,13 @@ Because Juju checks each endpoint separately, units also compare the names
 published on `alloy-peers` and block, keeping the last applied config, when
 they disagree. Further principals get their own `alloy-sub` application.
 
+Alloy itself is machine-wide, so ownership is recorded in
+`/var/lib/juju-alloy/owner.json` and claimed under a file lock before any
+install, config write, or service control. A non-owner blocks and touches
+nothing. The `adopt-alloy` action claims an unmanaged deb-package install; a
+unit upgraded from a revision without the marker claims its own running Alloy
+on its first hook after the refresh.
+
 The same sink relations carry standard alert-rule databags. Dashboards are
 published directly by principals to Grafana and are outside Alloy's role.
 

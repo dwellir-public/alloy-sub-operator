@@ -141,3 +141,91 @@ def test_architecture_doc_states_single_principal_rule():
     assert "one principal application" in architecture
     assert "`limit: 1`" in architecture
     assert "`alloy-peers`" in architecture
+
+
+def test_charmcraft_declares_the_adopt_alloy_action():
+    import yaml
+
+    action = yaml.safe_load(Path("charmcraft.yaml").read_text())["actions"]["adopt-alloy"]
+    assert action["params"] == {
+        "force": {"type": "boolean", "default": False, "description": action["params"]["force"]["description"]}
+    }
+    assert action["additionalProperties"] is False
+
+
+def test_readme_documents_alloy_ownership_and_adoption():
+    readme = Path("README.md").read_text()
+
+    assert "## One Alloy per machine" in readme
+    section = readme.split("## One Alloy per machine")[1].split("\n## ")[0]
+    assert "Alloy on this machine is managed by <unit>; remove this unit's principal relation" in section
+    assert "unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy" in section
+    assert "juju run alloy-sub/0 adopt-alloy" in section
+    assert "force=true" in section
+    assert "/var/lib/juju-alloy/owner.json" in section
+    assert "alloy-vm" in section
+    assert "apt-get purge alloy" in section
+
+
+def test_architecture_doc_states_alloy_ownership():
+    architecture = Path("docs/charm-architecture.md").read_text()
+
+    assert "/var/lib/juju-alloy/owner.json" in architecture
+    assert "adopt-alloy" in architecture
+
+
+def _flat(text):
+    """Join wrapped lines so phrases match across Markdown line breaks."""
+    return " ".join(text.split())
+
+
+def _readme_section(readme, heading):
+    return _flat(readme.split(heading)[1].split("\n## ")[0].split("\n### ")[0])
+
+
+def test_readme_describes_what_adoption_does_to_the_config():
+    readme = Path("README.md").read_text()
+
+    section = _readme_section(readme, "### Adopting a manually installed Alloy")
+    assert "keeps the installed version" in section
+    assert "/etc/alloy/config.alloy.package-default" in section
+    assert "keeps running on that config until the unit has its relations" in section
+    assert "restarts Alloy" in section
+    assert "stops being collected" in section
+    assert "has no relations" in section
+    assert "Alloy restarts once" not in section
+
+
+def test_charmcraft_adopt_alloy_description_matches_the_readme():
+    import yaml
+
+    description = " ".join(
+        yaml.safe_load(Path("charmcraft.yaml").read_text())["actions"]["adopt-alloy"]["description"].split()
+    )
+    assert "/etc/alloy/config.alloy.package-default" in description
+    assert "keeps running on that config until the unit has its relations" in description
+    assert "restarted once" not in description
+
+
+def test_readme_warns_that_alloy_vm_records_no_ownership():
+    readme = Path("README.md").read_text()
+
+    section = _flat(readme.split("## One Alloy per machine")[1].split("\n## ")[0])
+    assert "An older `alloy-vm` revision records no" in section
+    assert "Never run `adopt-alloy` on a machine where an `alloy-vm`" in section
+    assert "an `alloy-vm` or `alloy-sub` unit on an older revision that has not been refreshed yet" in section
+    assert "refresh it first; do not adopt" in section
+
+
+def test_readme_explains_adoption_after_moving_a_principal():
+    readme = Path("README.md").read_text()
+
+    single = _readme_section(readme, "### Upgrading an application that has several principals")
+    assert "blocks until that unit is gone and then installs on its own" not in single
+    assert "unmanaged Alloy found; run the adopt-alloy action or uninstall Alloy" in single
+    assert "juju run alloy-sub-other/<n> adopt-alloy" in single
+    assert "while the old unit is still on the machine" in single
+
+    upgrading = _flat(readme.split("## One Alloy per machine")[1].split("\n## ")[0].split("### Upgrading")[1])
+    assert "needs `adopt-alloy`" in upgrading
+    assert "stuck failing its install" in upgrading
