@@ -775,6 +775,7 @@ def test_configure_restarts_alloy_when_custom_args_change():
         _profiling_sources=lambda principal_context: [],
         _profiling_sink_url=lambda: None,
         _profiles_scrape_interval=lambda: "15s",
+        _static_labels=lambda: {},
         _has_profiling_sources=lambda: False,
         _configured_log_files=lambda: [],
         _file_log_sources=lambda payload: [],
@@ -840,6 +841,7 @@ def test_configure_restarts_alloy_when_custom_args_not_applied():
         _profiling_sources=lambda principal_context: [],
         _profiling_sink_url=lambda: None,
         _profiles_scrape_interval=lambda: "15s",
+        _static_labels=lambda: {},
         _has_profiling_sources=lambda: False,
         _configured_log_files=lambda: [],
         _file_log_sources=lambda payload: [],
@@ -905,6 +907,7 @@ def test_configure_reloads_alloy_when_custom_args_do_not_change():
         _profiling_sources=lambda principal_context: [],
         _profiling_sink_url=lambda: None,
         _profiles_scrape_interval=lambda: "15s",
+        _static_labels=lambda: {},
         _has_profiling_sources=lambda: False,
         _configured_log_files=lambda: [],
         _file_log_sources=lambda payload: [],
@@ -1524,3 +1527,26 @@ def test_no_machine_observability_and_no_host_metrics_still_waits():
     assert state_out.unit_status == testing.WaitingStatus(
         "Alloy service down; config waiting for machine-observability relation"
     )
+
+
+def test_static_labels_config_reaches_the_rendered_config():
+    state = _ready_state(with_loki=True, with_remote_write=True)
+    payload = _machine_observability_payload(systemd_units=["app.service"])
+    next(r for r in state.relations if r.endpoint == "machine-observability").remote_app_data["payload"] = payload
+    state.config["static-labels"] = "gateway_region=dc1"
+    _, config = _run_and_capture_config(state, event_name="config_changed")
+    assert config.count('gateway_region = "dc1"') == 2
+
+
+def test_invalid_static_labels_block_and_keep_config():
+    state = _ready_state(with_loki=True, with_remote_write=True)
+    state.config["static-labels"] = "gateway_region=dc1"
+    state_out, _ = _run_and_capture_config(state, event_name="config_changed")
+    state_out.config["static-labels"] = "gateway-region=x"
+    ctx = testing.Context(AlloySubCharm)
+    with patch("charm.alloy.is_active", return_value=True), patch("charm.alloy.write_config_text") as write:
+        blocked = ctx.run(ctx.on.config_changed(), state_out)
+    assert isinstance(blocked.unit_status, testing.BlockedStatus)
+    assert "config invalid" in blocked.unit_status.message
+    assert "gateway-region" in blocked.unit_status.message
+    write.assert_not_called()

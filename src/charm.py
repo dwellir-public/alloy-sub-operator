@@ -64,6 +64,7 @@ try:
         decode_principals,
         encode_principals,
     )
+    from .static_labels import parse_static_labels
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
         MAX_SERIALIZED_PAYLOAD_BYTES,
@@ -108,6 +109,7 @@ except ImportError:
         decode_principals,
         encode_principals,
     )
+    from static_labels import parse_static_labels
 
 
 class PayloadDecodeError(ValueError):
@@ -1152,6 +1154,7 @@ class AlloySubCharm(ops.CharmBase):
             profiling_sources=profiling_sources,
             profiling_sink_url=profiling_sink_url,
             profiles_scrape_interval=self._profiles_scrape_interval(),
+            external_labels=self._static_labels(),
         )
         desired_custom_args = self._desired_custom_args()
         previous_custom_args = self._stored.last_custom_args
@@ -1518,6 +1521,10 @@ class AlloySubCharm(ops.CharmBase):
     def _tls_insecure_skip_verify(self) -> bool:
         """Return whether scrape TLS verification should be skipped."""
         return bool(self.config.get("tls_insecure_skip_verify", False))
+
+    def _static_labels(self) -> dict[str, str]:
+        """Return the validated static-labels option, raising StaticLabelsError when invalid."""
+        return parse_static_labels(str(self.config.get("static-labels", "")))
 
     def _host_metrics_enabled(self) -> bool:
         """Return whether host metrics should be collected."""

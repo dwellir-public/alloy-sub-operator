@@ -13,6 +13,7 @@ and consumes generic workload source declarations from the principal over
 - collect declared journald and file logs
 - forward logs to Loki
 - forward metrics via remote write
+- add the `static-labels` option as `external_labels` on the Mimir remote-write and Loki writers
 - validate, topology-label, and forward v3 Prometheus and Loki alert rules
 - publish built-in host disk and memory usage alert rules when host metrics are enabled
 

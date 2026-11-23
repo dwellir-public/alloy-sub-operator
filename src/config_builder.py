@@ -165,6 +165,7 @@ class ConfigBuilder:
         profiling_sources: list[ProfilingSource] | None = None,
         profiling_sink_url: str | None = None,
         profiles_scrape_interval: str = "15s",
+        external_labels: dict[str, str] | None = None,
     ):
         self._loki_endpoints = loki_endpoints
         self._remote_write_endpoints = remote_write_endpoints
@@ -183,6 +184,7 @@ class ConfigBuilder:
         self._profiling_sources = profiling_sources or []
         self._profiling_sink_url = profiling_sink_url
         self._profiles_scrape_interval = profiles_scrape_interval
+        self._external_labels = external_labels or {}
 
     def build(self) -> str:
         """Return the rendered Alloy configuration."""
@@ -223,6 +225,7 @@ class ConfigBuilder:
             [
                 f'prometheus.remote_write "{REMOTE_WRITE_COMPONENT_NAME}" {{',
                 endpoint_blocks,
+                *self._render_external_labels(),
                 "",
                 "  wal {",
                 '    min_keepalive_time = "0s"',
@@ -231,6 +234,11 @@ class ConfigBuilder:
                 "}",
             ]
         )
+
+    def _render_external_labels(self) -> list[str]:
+        if not self._external_labels:
+            return []
+        return ["  external_labels = {", *self._render_label_lines(self._external_labels, indent="    "), "  }"]
 
     def _render_endpoint_block(self, endpoint: OutboundEndpoint) -> list[str]:
         lines = ["  endpoint {", f'    url = "{endpoint.url}"']
@@ -546,6 +554,7 @@ class ConfigBuilder:
             [
                 'loki.write "main" {',
                 endpoint_blocks,
+                *self._render_external_labels(),
                 "}",
             ]
         )

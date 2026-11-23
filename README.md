@@ -401,6 +401,36 @@ file and journal sources remain:
 juju config alloy-sub log-files=''
 ```
 
+## Static labels
+
+Use `static-labels` to add fixed labels to everything this application sends to
+Mimir and Loki:
+
+```bash
+juju config alloy-sub static-labels='gateway_region=dc1,environment=production'
+```
+
+The value is comma-separated `name=value` pairs. Whitespace around names, values
+and commas is trimmed, empty entries are ignored, and the value is everything
+after the first `=`. Names must match `[A-Za-z_][A-Za-z0-9_]*`, must not start
+with `juju_` or `__`, and must not be `job` or `instance`. Values must be
+non-empty, a name may appear once, and there can be at most 16 labels with names
+and values of at most 128 characters. An invalid value blocks the unit with a
+message naming the entry and leaves the running Alloy configuration unchanged.
+Its default is empty, which renders no labels.
+
+The labels are rendered as `external_labels` on the `prometheus.remote_write`
+and `loki.write` components, so they apply to host metrics and to the
+principal's metrics and logs alike. Profiles and forwarded alert rules are not
+labelled. Because `gateway_region` can be set here, a principal does not need to
+publish that label itself.
+
+If a series or log stream already carries a label with the same name, the
+existing label wins and the static label is not applied. Grafana's Alloy
+reference does not document this; it follows from the implementation:
+`prometheus.remote_write` only sets an external label when the series lacks it,
+and `loki.write` merges the stream's own labels over the external ones.
+
 ## Host metrics
 
 Set `enable-host-metrics=true` to collect host-level metrics, labelled with the

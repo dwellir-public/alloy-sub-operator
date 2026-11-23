@@ -572,3 +572,52 @@ def test_profiling_labels_cannot_override_address_or_service_name():
     assert '"service_name" = "gotodo"' in config
     assert "169.254.169.254" not in config
     assert "evil" not in config
+
+
+def _static_labels_builder(*, loki=True, **overrides):
+    kwargs = {
+        "loki_endpoints": ["http://loki:3100/loki/api/v1/push"] if loki else [],
+        "remote_write_endpoints": [REMOTE_WRITE_URL],
+        "metrics_scrape_jobs": [],
+        "systemd_units": ["app.service"],
+        "journal_match_expressions": [],
+        "file_log_sources": [],
+        "topology_labels": {"juju_application": "app"},
+        "global_scrape_interval": "1m",
+        "global_scrape_timeout": "10s",
+        "path_exclude": [],
+        "queue_size": 1000,
+        "max_elapsed_time_min": 5,
+        "tls_insecure_skip_verify": False,
+    }
+    kwargs.update(overrides)
+    return ConfigBuilder(**kwargs)
+
+
+def _block(config, header):
+    start = config.index(header)
+    return config[start : config.index("\n}\n", start)]
+
+
+def test_static_labels_render_on_both_writers():
+    config = _static_labels_builder(external_labels={"gateway_region": "dc1", "environment": "production"}).build()
+    expected = '  external_labels = {\n    environment = "production",\n    gateway_region = "dc1",\n  }'
+    assert expected in _block(config, 'prometheus.remote_write "metrics"')
+    assert expected in _block(config, 'loki.write "main"')
+
+
+def test_empty_static_labels_render_nothing():
+    omitted = _static_labels_builder().build()
+    assert _static_labels_builder(external_labels={}).build() == omitted
+    assert _static_labels_builder(external_labels=None).build() == omitted
+    assert "external_labels" not in omitted
+
+
+def test_static_label_values_are_escaped():
+    config = _static_labels_builder(external_labels={"a": 'a"b\\c'}).build()
+    assert 'a = "a\\"b\\\\c",' in config
+
+
+def test_static_labels_with_a_single_backend():
+    config = _static_labels_builder(loki=False, external_labels={"a": "b"}).build()
+    assert config.count("external_labels") == 1
