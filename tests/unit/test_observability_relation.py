@@ -1583,3 +1583,65 @@ def test_invalid_artifact_identity_does_not_inject_log_content(monkeypatch, capl
     assert "UNIQUE-SECRET" not in caplog.text
     assert "forged-log-line" not in caplog.text
     assert "unknown/unknown: schema" in caplog.text
+
+
+def _scrape_config_for(monkeypatch, endpoints):
+    import src.charm as charm_module
+
+    writes = []
+    monkeypatch.setattr(charm_module.alloy, "ensure_config_dir_permissions", lambda *_: None)
+    monkeypatch.setattr(
+        charm_module.alloy, "write_config_text", lambda *a, **k: writes.append(a[0] if a else k["config_text"])
+    )
+    monkeypatch.setattr(charm_module.alloy, "write_custom_args", lambda *_, **__: None)
+    monkeypatch.setattr(charm_module.alloy, "custom_args_applied", lambda *_, **__: True)
+    monkeypatch.setattr(charm_module.alloy, "verify_config", lambda **_: None)
+    monkeypatch.setattr(charm_module.alloy, "is_active", lambda *_: True)
+    monkeypatch.setattr(charm_module.alloy, "reload", lambda *_, **__: None)
+    monkeypatch.setattr(charm_module.alloy, "restart", lambda *_, **__: None)
+    harness = testing.Harness(AlloySubCharm)
+    harness.set_leader(True)
+    harness.begin()
+    juju_info = harness.add_relation("juju-info", "iris")
+    harness.add_relation_unit(juju_info, "iris/0")
+    machine = harness.add_relation("machine-observability", "iris")
+    payload = _v3_payload()
+    payload["source_topology"].update({"application": "iris", "unit": "iris/0", "charm_name": "iris"})
+    payload["metrics_endpoints"] = endpoints
+    harness.update_relation_data(machine, "iris", {"payload": json.dumps(payload)})
+    assert writes
+    return writes[-1]
+
+
+def _target_blocks(config):
+    return [chunk.split("    },")[0] for chunk in config.split("__address__ = ")[1:]]
+
+
+def test_endpoint_labels_reach_the_rendered_scrape_target(monkeypatch):
+    config = _scrape_config_for(monkeypatch, [{"targets": ["localhost:9092"], "labels": {"gateway_region": "dc1"}}])
+
+    (block,) = _target_blocks(config)
+    assert 'gateway_region = "dc1"' in block
+    assert 'juju_unit = "iris/0"' in block
+
+
+def test_endpoint_labels_stay_per_endpoint(monkeypatch):
+    config = _scrape_config_for(
+        monkeypatch,
+        [
+            {"targets": ["localhost:1"], "labels": {"a": "1"}},
+            {"targets": ["localhost:2"], "labels": {"b": "2"}},
+        ],
+    )
+
+    first, second = _target_blocks(config)
+    assert 'a = "1"' in first
+    assert "b =" not in first
+    assert 'b = "2"' in second
+    assert 'a = "1"' not in second
+
+
+def test_endpoint_label_values_are_escaped(monkeypatch):
+    config = _scrape_config_for(monkeypatch, [{"targets": ["localhost:1"], "labels": {"a": 'a"b\\c'}}])
+
+    assert 'a = "a\\"b\\\\c"' in config

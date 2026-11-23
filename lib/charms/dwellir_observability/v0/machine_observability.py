@@ -22,6 +22,7 @@ import hmac
 import io
 import json
 import logging
+import re
 import zlib
 from collections.abc import Iterable
 from typing import Any, Callable, Literal, Optional
@@ -29,19 +30,24 @@ from typing import Any, Callable, Literal, Optional
 from ops.charm import CharmBase, HookEvent, RelationBrokenEvent, RelationChangedEvent
 from ops.framework import EventBase, EventSource, Object, ObjectEvents
 from ops.model import Relation
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
 LIBID = "0b7d5c45f19b4b4b9876db265b31af48"
 LIBAPI = 0
-LIBPATCH = 5
+LIBPATCH = 6
 
 DEFAULT_RELATION_NAME = "machine-observability"
 MACHINE_OBSERVABILITY_SCHEMA_VERSION_V1 = 1
 MACHINE_OBSERVABILITY_SCHEMA_VERSION_V2 = 2
 MACHINE_OBSERVABILITY_SCHEMA_VERSION_V3 = 3
 MAX_SERIALIZED_PAYLOAD_BYTES = 60 * 1024
+MAX_ENDPOINT_LABELS = 16
+MAX_LABEL_LENGTH = 128
+LABEL_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+RESERVED_LABEL_PREFIXES = ("juju_", "__")
+RESERVED_LABEL_NAMES = frozenset({"job", "instance"})
 MAX_DECODED_ARTIFACT_BYTES = 1024 * 1024
 MAX_TOTAL_DECODED_ARTIFACT_BYTES = 1024 * 1024
 
@@ -173,6 +179,22 @@ class MetricsEndpoint(BaseModel):
     interval: str = ""
     timeout: str = ""
     tls: dict[str, str | bool] = Field(default_factory=dict)
+    labels: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("labels")
+    @classmethod
+    def _validate_labels(cls, labels: dict[str, str]) -> dict[str, str]:
+        """Enforce the static label rules; collectors own the reserved names."""
+        if len(labels) > MAX_ENDPOINT_LABELS:
+            raise ValueError(f"at most {MAX_ENDPOINT_LABELS} labels are allowed per endpoint")
+        for name, value in labels.items():
+            if len(name) > MAX_LABEL_LENGTH or len(value) > MAX_LABEL_LENGTH:
+                raise ValueError(f"label names and values are limited to {MAX_LABEL_LENGTH} characters")
+            if not LABEL_NAME_PATTERN.fullmatch(name):
+                raise ValueError("label names must match [A-Za-z_][A-Za-z0-9_]*")
+            if name.startswith(RESERVED_LABEL_PREFIXES) or name in RESERVED_LABEL_NAMES:
+                raise ValueError(f"label name {name!r} is reserved")
+        return labels
 
 
 class LogFileSource(BaseModel):
@@ -254,6 +276,9 @@ def serialize_machine_observability_payload(
         else set()
     )
     serializable = validated.model_dump(mode="json", exclude=excluded_fields)
+    for endpoint in serializable["metrics_endpoints"]:
+        if not endpoint["labels"]:
+            del endpoint["labels"]
 
     serialized = json.dumps(
         serializable,

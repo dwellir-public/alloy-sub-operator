@@ -191,7 +191,7 @@ def translate_metrics_endpoint(
 ) -> BuilderMetricsScrapeJob:
     """Translate one relation metrics endpoint into a config-builder scrape job."""
     job_name = principal_application if source_index == 0 else f"{principal_application}-{source_index}"
-    targets = [ScrapeTarget(address=target) for target in endpoint.targets]
+    targets = [ScrapeTarget(address=target, labels=dict(endpoint.labels)) for target in endpoint.targets]
     return BuilderMetricsScrapeJob(
         job_name=job_name,
         targets=targets,
@@ -1382,7 +1382,10 @@ class AlloySubCharm(ops.CharmBase):
         return [
             BuilderMetricsScrapeJob(
                 job_name=job.job_name,
-                targets=[ScrapeTarget(address=target.address, labels=topology_labels) for target in job.targets],
+                targets=[
+                    ScrapeTarget(address=target.address, labels={**target.labels, **topology_labels})
+                    for target in job.targets
+                ],
                 metrics_path=job.metrics_path,
                 scheme=job.scheme,
                 scrape_interval=job.scrape_interval,
