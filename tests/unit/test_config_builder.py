@@ -572,3 +572,26 @@ def test_profiling_labels_cannot_override_address_or_service_name():
     assert '"service_name" = "gotodo"' in config
     assert "169.254.169.254" not in config
     assert "evil" not in config
+
+
+def _scrape_target_config(labels):
+    job = MetricsScrapeJob(
+        job_name="polkadot",
+        targets=[ScrapeTarget(address="10.0.0.5:9615", labels=labels)],
+        metrics_path="/metrics",
+    )
+    return _profiling_builder(remote_write_endpoints=[REMOTE_WRITE_URL], metrics_scrape_jobs=[job]).build()
+
+
+def test_endpoint_label_values_render_non_bmp_characters_literally():
+    config = _scrape_target_config({"juju_application": "polkadot", "mood": "happy 😀 å"})
+    assert 'mood = "happy 😀 å",' in config
+    assert "\\ud" not in config.lower()
+
+
+def test_endpoint_label_keys_true_false_null_render_quoted():
+    config = _scrape_target_config({"true": "a", "false": "b", "null": "c", "region": "d"})
+    assert '"true" = "a",' in config
+    assert '"false" = "b",' in config
+    assert '"null" = "c",' in config
+    assert '      region = "d",' in config
