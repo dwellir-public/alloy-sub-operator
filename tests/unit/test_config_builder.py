@@ -621,3 +621,17 @@ def test_static_label_values_are_escaped():
 def test_static_labels_with_a_single_backend():
     config = _static_labels_builder(loki=False, external_labels={"a": "b"}).build()
     assert config.count("external_labels") == 1
+
+
+def test_static_label_values_render_non_bmp_characters_literally():
+    config = _static_labels_builder(external_labels={"mood": "happy 😀 å"}).build()
+    assert 'mood = "happy 😀 å",' in config
+    assert "\\ud" not in config.lower()
+
+
+def test_static_label_keys_true_false_null_render_quoted():
+    config = _static_labels_builder(external_labels={"true": "a", "false": "b", "null": "c", "region": "d"}).build()
+    assert '    "true" = "a",' in config
+    assert '    "false" = "b",' in config
+    assert '    "null" = "c",' in config
+    assert '    region = "d",' in config

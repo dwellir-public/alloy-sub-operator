@@ -417,7 +417,18 @@ with `juju_` or `__`, and must not be `job` or `instance`. Values must be
 non-empty, a name may appear once, and there can be at most 16 labels with names
 and values of at most 128 characters. An invalid value blocks the unit with a
 message naming the entry and leaves the running Alloy configuration unchanged.
-Its default is empty, which renders no labels.
+Its default is empty, which renders no labels. Values cannot contain a comma,
+because it separates entries.
+
+Static labels count toward the backend's per-series label limit. Loki's default is 15
+label names per stream, and every stream already carries the five `juju_*` topology
+labels plus its source labels, so roughly eight or more static labels can push a stream
+over the limit. Loki then rejects the push and Alloy drops those logs while the charm
+stays active. Mimir's default limit is 30 label names per series.
+
+Setting, changing or clearing the option changes the identity of every series and log
+stream this application sends. Expect a one-time discontinuity: alert `for:` timers
+reset, and the old and new series overlap briefly in queries.
 
 The labels are rendered as `external_labels` on the `prometheus.remote_write`
 and `loki.write` components, so they apply to host metrics and to the
@@ -429,7 +440,8 @@ If a series or log stream already carries a label with the same name, the
 existing label wins and the static label is not applied. Grafana's Alloy
 reference does not document this; it follows from the implementation:
 `prometheus.remote_write` only sets an external label when the series lacks it,
-and `loki.write` merges the stream's own labels over the external ones.
+and `loki.write` merges the stream's own labels over the external ones. Verify
+on your Alloy version if the distinction matters.
 
 ## Host metrics
 

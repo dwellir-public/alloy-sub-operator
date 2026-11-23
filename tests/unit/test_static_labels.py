@@ -56,3 +56,12 @@ def test_parse_static_labels_accepts_the_limits():
 def test_parse_error_names_the_entry():
     with pytest.raises(StaticLabelsError, match="gateway-region"):
         parse_static_labels("ok=1,gateway-region=x")
+
+
+def test_parse_error_truncates_a_long_entry():
+    entry = "bad-name" + "x" * 200 + "=v"
+    with pytest.raises(StaticLabelsError) as error:
+        parse_static_labels(entry)
+    assert "bad-name" in str(error.value)
+    assert entry not in str(error.value)
+    assert len(str(error.value)) < 150

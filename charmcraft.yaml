@@ -114,12 +114,17 @@ config:
         Loki, host metrics and the principal's metrics and logs alike. Format:
         comma-separated name=value pairs, for example
         gateway_region=dc1,environment=production. Whitespace around names,
-        values and commas is trimmed and empty entries are ignored. Names must
-        match [A-Za-z_][A-Za-z0-9_]*, must not start with juju_ or __, and must
-        not be job or instance. Values must be non-empty. At most 16 labels,
-        each name and value at most 128 characters. An invalid value blocks the
-        unit and leaves the running configuration unchanged. Profiles are not
-        labelled.
+        values and commas is trimmed, empty entries are ignored, and the value
+        is everything after the first =. Values cannot contain a comma. Names
+        must match [A-Za-z_][A-Za-z0-9_]*, must not start with juju_ or __, and
+        must not be job or instance. Values must be non-empty. A name may appear
+        once. At most 16 labels, each name and value at most 128 characters. An
+        invalid value blocks the unit and leaves the running configuration
+        unchanged. Profiles are not labelled.
+
+        Static labels count toward the backend's per-series label limit. Loki's
+        default is 15 label names per stream, including the Juju topology and source
+        labels; exceeding it makes Loki reject the logs without the charm noticing.
       type: string
       default: ""
     queue_size:

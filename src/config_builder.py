@@ -298,7 +298,7 @@ class ConfigBuilder:
                     "",
                     "  rule {",
                     f"    target_label = {json.dumps(key)}",
-                    f"    replacement  = {json.dumps(host_metrics.topology_labels[key])}",
+                    f"    replacement  = {json.dumps(host_metrics.topology_labels[key], ensure_ascii=False)}",
                     "  }",
                 ]
             )
@@ -333,7 +333,9 @@ class ConfigBuilder:
         lines = [f'pyroscope.scrape "{component_name}" {{', "  targets = ["]
         for address in source.targets:
             target = {**source.labels, "__address__": address, "service_name": source.service_name}
-            pairs = ", ".join(f"{json.dumps(key)} = {json.dumps(target[key])}" for key in sorted(target))
+            pairs = ", ".join(
+                f"{json.dumps(key)} = {json.dumps(target[key], ensure_ascii=False)}" for key in sorted(target)
+            )
             lines.append(f"    {{{pairs}}},")
         lines.extend(
             [
@@ -577,9 +579,13 @@ class ConfigBuilder:
 
     @staticmethod
     def _render_key(key: str) -> str:
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+        # Alloy tokenises true/false/null as literals, so they cannot be bare object keys.
+        if key not in ("true", "false", "null") and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
             return key
-        return json.dumps(key)
+        return json.dumps(key, ensure_ascii=False)
 
     def _render_label_lines(self, labels: dict[str, str], *, indent: str) -> list[str]:
-        return [f"{indent}{self._render_key(key)} = {json.dumps(labels[key])}," for key in sorted(labels)]
+        return [
+            f"{indent}{self._render_key(key)} = {json.dumps(labels[key], ensure_ascii=False)},"
+            for key in sorted(labels)
+        ]
