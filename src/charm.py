@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from typing import TypeAlias, cast
 
 import ops
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointConsumer
 from pydantic_core import from_json
 
 try:
@@ -64,6 +65,7 @@ try:
         decode_principals,
         encode_principals,
     )
+    from .related_metrics import related_scrape_jobs
 except ImportError:
     from charms.dwellir_observability.v0.machine_observability import (
         MAX_SERIALIZED_PAYLOAD_BYTES,
@@ -108,6 +110,7 @@ except ImportError:
         decode_principals,
         encode_principals,
     )
+    from related_metrics import related_scrape_jobs
 
 
 class PayloadDecodeError(ValueError):
@@ -293,6 +296,9 @@ class AlloySubCharm(ops.CharmBase):
         self.framework.observe(self.on.update_status, self._on_update_status)
         self.framework.observe(self.on.leader_elected, self._on_leader_elected)
         self.framework.observe(self.on.upgrade_charm, self._on_upgrade_charm)
+        self._metrics_consumer = MetricsEndpointConsumer(self, relation_name="metrics-endpoint")
+        self.framework.observe(self._metrics_consumer.on.targets_changed, self._reconcile_config)
+        self.framework.observe(self.on.metrics_endpoint_relation_broken, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_joined, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_changed, self._on_relation_event)
         self.framework.observe(self.on.juju_info_relation_broken, self._on_relation_event)
@@ -1093,6 +1099,7 @@ class AlloySubCharm(ops.CharmBase):
             not self._has_machine_observability_relation()
             and not self._has_local_sources()
             and not self._has_profiling_sources()
+            and not self.model.relations.get("metrics-endpoint", [])
         ):
             # Local host metrics or configured logs can form a pipeline
             # without a workload observability declaration.
@@ -1122,6 +1129,7 @@ class AlloySubCharm(ops.CharmBase):
             artifact_identities,
         )
 
+        self._textfile_directory()
         topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
         profiling_sources = self._profiling_sources(principal_context)
         profiling_sink_url = self._profiling_sink_url()
@@ -1145,6 +1153,7 @@ class AlloySubCharm(ops.CharmBase):
                 HostMetrics(
                     topology_labels=topology_labels,
                     scrape_timeout=self._global_scrape_timeout(),
+                    textfile_directory=self._textfile_directory(),
                 )
                 if self._host_metrics_enabled()
                 else None
@@ -1191,6 +1200,7 @@ class AlloySubCharm(ops.CharmBase):
                 name
                 for name, enabled in (
                     ("host metrics", self._host_metrics_enabled()),
+                    ("related metrics", bool(self.model.relations.get("metrics-endpoint", []))),
                     ("configured file logs", self._configured_log_files()),
                     ("configured journal logs", self._configured_systemd_service()),
                     (profiles_label, self._has_profiling_sources()),
@@ -1230,6 +1240,7 @@ class AlloySubCharm(ops.CharmBase):
             not self._has_machine_observability_relation()
             and not self._has_local_sources()
             and not self._has_profiling_sources()
+            and not self.model.relations.get("metrics-endpoint", [])
         ):
             missing_relations.append("machine-observability relation")
         return missing_relations
@@ -1379,7 +1390,7 @@ class AlloySubCharm(ops.CharmBase):
             )
             for index, endpoint in enumerate(payload.metrics_endpoints)
         ]
-        return [
+        jobs = [
             BuilderMetricsScrapeJob(
                 job_name=job.job_name,
                 targets=[ScrapeTarget(address=target.address, labels=topology_labels) for target in job.targets],
@@ -1391,6 +1402,9 @@ class AlloySubCharm(ops.CharmBase):
             )
             for job in translated_jobs
         ]
+        if not self.model.relations.get("metrics-endpoint", []):
+            return jobs
+        return [*jobs, *related_scrape_jobs(self._metrics_consumer.jobs(), principal_context, existing=jobs)]
 
     def _grafana_cloud_status_error(self) -> str | None:
         """Return the first Grafana Cloud connectivity failure, if any."""
@@ -1518,6 +1532,13 @@ class AlloySubCharm(ops.CharmBase):
     def _tls_insecure_skip_verify(self) -> bool:
         """Return whether scrape TLS verification should be skipped."""
         return bool(self.config.get("tls_insecure_skip_verify", False))
+
+    def _textfile_directory(self) -> str:
+        """Validate the opt-in textfile path without changing host files."""
+        directory = str(self.config.get("textfile-directory", "")).strip()
+        if directory and (not Path(directory).is_absolute() or not self._host_metrics_enabled()):
+            raise ValueError("textfile-directory requires an absolute path and enable-host-metrics=true")
+        return directory
 
     def _host_metrics_enabled(self) -> bool:
         """Return whether host metrics should be collected."""

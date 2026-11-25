@@ -52,6 +52,7 @@ rules.
 
 - `juju-info`: subordinate attachment and principal unit discovery
 - `machine-observability`: neutral observability declarations from the principal
+- `metrics-endpoint`: optional direct `prometheus_scrape` compatibility for existing principals
 - `send-loki-logs`: outbound Loki forwarding
 - `send-remote-write`: outbound metrics forwarding
 - `grafana-cloud-config`: outbound Grafana Cloud endpoints and credentials
@@ -498,3 +499,35 @@ Upgrade Loki/Mimir receivers and gateways before collectors when aggregates exce
 the JSON size limit. Encoded values remain below 60 KiB, with the collector's
 existing stricter publication guard retained. Compression does not change source
 topology, machine-observability schema/artifact encoding, or artifact-count limits.
+
+## Direct metrics and textfiles
+
+Existing principals with `metrics-endpoint` can supply workload scrapes without
+first migrating their charm to machine-observability:
+
+```bash
+juju integrate iris:juju-info alloy-iris-sub:juju-info
+juju integrate iris:metrics-endpoint alloy-iris-sub:metrics-endpoint
+juju integrate alloy-iris-sub:send-remote-write mimir-gateway-vm:receive-remote-write
+```
+
+Each subordinate scrapes only its attached principal unit. Provider job labels,
+paths, intervals, supported TLS settings and target relabel rules are retained.
+Unsupported job fields reject reconciliation rather than being silently dropped.
+Machine-observability sources take precedence when both interfaces declare the
+same address/path/scheme. Existing principals that publish node-exporter through
+metrics-endpoint should leave `enable-host-metrics=false` to avoid duplication.
+One subordinate application still serves one principal application.
+
+For existing Prometheus textfiles on a principal machine:
+
+```bash
+juju config alloy-bcm-sub enable-host-metrics=true \
+  textfile-directory=/var/lib/internal-bcm/textfile
+```
+
+The directory must be absolute and readable by Alloy. An empty value (the
+default) leaves textfile collection disabled. The charm does not create, copy,
+change ownership of or delete collector outputs. This uses the embedded host
+exporter and exposes no additional metrics port. See the
+[compatibility and validation report](docs/reports/2026-11-25-direct-metrics-and-textfiles.md).

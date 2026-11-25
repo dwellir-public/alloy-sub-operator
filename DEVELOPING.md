@@ -36,6 +36,11 @@ model and verify both:
 - `alloy-sub-reference` attached to `dwellir-observability-reference` becomes
   healthy with its v3 payload
 
+Direct scrape and textfile regression tests live in
+`tests/unit/test_related_metrics.py`; the disposable Alloy runtime test for this
+path is `tests/integration/test_direct_metrics_runtime.py`. Set `ALLOY_BINARY`
+to exercise the real component graph without a Juju deployment.
+
 ## Releasing to charmhub
 
 Get a new token.

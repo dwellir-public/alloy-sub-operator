@@ -9,6 +9,7 @@ from collections.abc import Iterable
 PRINCIPAL_ENDPOINTS: tuple[str, ...] = (
     "juju-info",
     "machine-observability",
+    "metrics-endpoint",
     "profiling-source",
 )
 PEER_RELATION = "alloy-peers"

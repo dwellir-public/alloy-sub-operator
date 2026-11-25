@@ -66,5 +66,19 @@
     "upstream_owner_repository": "https://github.com/canonical/pyroscope-operators",
     "upstream_base_commit": null,
     "modifications": "None: exact copy."
+  },
+  {
+    "path": "lib/charms/prometheus_k8s/v0/prometheus_scrape.py",
+    "sha256": "ad30dcd31175da3d35aaf9314120f912cd6fa875dada3ef95de9fe6bd7125f8e",
+    "library": {
+      "LIBID": "bc84295fef5f4049878f07b131968ee2",
+      "LIBAPI": 0,
+      "LIBPATCH": 56
+    },
+    "scope": "runtime",
+    "upstream_path": "lib/charms/prometheus_k8s/v0/prometheus_scrape.py",
+    "repository": "https://github.com/canonical/prometheus-k8s-operator",
+    "commit": "ca8bf34af89eb0f473c4530f5d496badf233362f",
+    "license": "Apache-2.0"
   }
 ]

@@ -95,6 +95,14 @@ config:
         off where remote write volume is a concern.
       type: boolean
       default: false
+    textfile-directory:
+      description: |
+        Absolute directory containing Prometheus .prom files for the embedded
+        host exporter. Empty disables textfile collection. Requires
+        enable-host-metrics=true. Files must be readable by the Alloy service;
+        the charm does not create or modify the directory or its contents.
+      type: string
+      default: ""
     profiles_scrape_interval:
       description: |
         How often Alloy pulls each pprof profile from profiling-source targets,
@@ -149,6 +157,10 @@ requires:
   machine-observability:
     interface: machine_observability
     scope: container
+    optional: true
+    limit: 1
+  metrics-endpoint:
+    interface: prometheus_scrape
     optional: true
     limit: 1
   send-loki-logs:

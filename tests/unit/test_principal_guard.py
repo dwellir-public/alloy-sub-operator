@@ -17,7 +17,7 @@ from principal_guard import (
 
 
 def test_constants():
-    assert PRINCIPAL_ENDPOINTS == ("juju-info", "machine-observability", "profiling-source")
+    assert PRINCIPAL_ENDPOINTS == ("juju-info", "machine-observability", "metrics-endpoint", "profiling-source")
     assert PEER_RELATION == "alloy-peers"
     assert PEER_KEY == "principal-applications"
 

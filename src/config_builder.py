@@ -104,6 +104,7 @@ class MetricsScrapeJob:
     scrape_interval: str = ""
     scrape_timeout: str = ""
     tls_config: dict[str, str | bool] = field(default_factory=dict)
+    relabel_configs: list[dict[str, object]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,7 @@ class HostMetrics:
     topology_labels: dict[str, str] = field(default_factory=dict)
     scrape_timeout: str = ""
     disable_collectors: list[str] = field(default_factory=list)
+    textfile_directory: str = ""
 
 
 @dataclass(frozen=True)
@@ -263,6 +265,15 @@ class ConfigBuilder:
         """
         name = HOST_METRICS_COMPONENT_NAME
         lines = [f'prometheus.exporter.unix "{name}" {{']
+        if host_metrics.textfile_directory:
+            lines.extend(
+                [
+                    '  enable_collectors = ["textfile"]',
+                    "  textfile {",
+                    f"    directory = {json.dumps(host_metrics.textfile_directory)}",
+                    "  }",
+                ]
+            )
         if host_metrics.disable_collectors:
             collectors = ", ".join(json.dumps(collector) for collector in host_metrics.disable_collectors)
             lines.append(f"  disable_collectors = [{collectors}]")
@@ -371,18 +382,36 @@ class ConfigBuilder:
     def _render_metrics_scrape(self, scrape_job: MetricsScrapeJob) -> str:
         component_name = self._sanitize_component_name(scrape_job.job_name)
         forward_to = self._metrics_forward_to()
-        lines = [
-            f'prometheus.scrape "{component_name}" {{',
-            "  targets = [",
-            *self._render_targets(scrape_job.targets),
-            "  ]",
-            f"  job_name = {json.dumps(scrape_job.job_name)}",
-            f"  metrics_path = {json.dumps(scrape_job.metrics_path)}",
-            f"  scheme = {json.dumps(scrape_job.scheme)}",
-            f"  scrape_interval = {json.dumps(scrape_job.scrape_interval or self._global_scrape_interval)}",
-            f"  scrape_timeout = {json.dumps(scrape_job.scrape_timeout or self._global_scrape_timeout)}",
-            f"  forward_to = {forward_to}",
-        ]
+        lines = []
+        if scrape_job.relabel_configs:
+            lines.extend(
+                [
+                    f'discovery.relabel "{component_name}" {{',
+                    "  targets = [",
+                    *self._render_targets(scrape_job.targets),
+                    "  ]",
+                ]
+            )
+            for rule in scrape_job.relabel_configs:
+                lines.append("  rule {")
+                lines.extend(f"    {key} = {json.dumps(value)}" for key, value in rule.items())
+                lines.append("  }")
+            lines.extend(["}", ""])
+            targets = [f"  targets = discovery.relabel.{component_name}.output"]
+        else:
+            targets = ["  targets = [", *self._render_targets(scrape_job.targets), "  ]"]
+        lines.extend(
+            [
+                f'prometheus.scrape "{component_name}" {{',
+                *targets,
+                f"  job_name = {json.dumps(scrape_job.job_name)}",
+                f"  metrics_path = {json.dumps(scrape_job.metrics_path)}",
+                f"  scheme = {json.dumps(scrape_job.scheme)}",
+                f"  scrape_interval = {json.dumps(scrape_job.scrape_interval or self._global_scrape_interval)}",
+                f"  scrape_timeout = {json.dumps(scrape_job.scrape_timeout or self._global_scrape_timeout)}",
+                f"  forward_to = {forward_to}",
+            ]
+        )
         if scrape_job.tls_config or self._tls_insecure_skip_verify:
             tls_config = dict(scrape_job.tls_config)
             if self._tls_insecure_skip_verify:
