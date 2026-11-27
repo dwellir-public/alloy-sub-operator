@@ -85,6 +85,15 @@ def format_go_duration(nanoseconds: int) -> str:
     return f"{nanoseconds}ns"
 
 
+def _alloy_string(value: str) -> str:
+    """Render an Alloy string literal, keeping non-ASCII literal except the byte order mark.
+
+    Alloy rejects JSON surrogate-pair escapes, so characters are written as they
+    are; it also rejects a literal U+FEFF anywhere but the start of the file.
+    """
+    return json.dumps(value, ensure_ascii=False).replace("\ufeff", "\\ufeff")
+
+
 @dataclass(frozen=True)
 class ScrapeTarget:
     """One rendered Alloy scrape target."""
@@ -290,7 +299,7 @@ class ConfigBuilder:
                     "",
                     "  rule {",
                     f"    target_label = {json.dumps(key)}",
-                    f"    replacement  = {json.dumps(host_metrics.topology_labels[key], ensure_ascii=False)}",
+                    f"    replacement  = {_alloy_string(host_metrics.topology_labels[key])}",
                     "  }",
                 ]
             )
@@ -325,9 +334,7 @@ class ConfigBuilder:
         lines = [f'pyroscope.scrape "{component_name}" {{', "  targets = ["]
         for address in source.targets:
             target = {**source.labels, "__address__": address, "service_name": source.service_name}
-            pairs = ", ".join(
-                f"{json.dumps(key)} = {json.dumps(target[key], ensure_ascii=False)}" for key in sorted(target)
-            )
+            pairs = ", ".join(f"{json.dumps(key)} = {_alloy_string(target[key])}" for key in sorted(target))
             lines.append(f"    {{{pairs}}},")
         lines.extend(
             [
@@ -573,10 +580,7 @@ class ConfigBuilder:
         # Alloy tokenises true/false/null as literals, so they cannot be bare object keys.
         if key not in ("true", "false", "null") and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
             return key
-        return json.dumps(key, ensure_ascii=False)
+        return _alloy_string(key)
 
     def _render_label_lines(self, labels: dict[str, str], *, indent: str) -> list[str]:
-        return [
-            f"{indent}{self._render_key(key)} = {json.dumps(labels[key], ensure_ascii=False)},"
-            for key in sorted(labels)
-        ]
+        return [f"{indent}{self._render_key(key)} = {_alloy_string(labels[key])}," for key in sorted(labels)]

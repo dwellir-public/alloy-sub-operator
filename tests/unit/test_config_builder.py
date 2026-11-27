@@ -589,6 +589,12 @@ def test_endpoint_label_values_render_non_bmp_characters_literally():
     assert "\\ud" not in config.lower()
 
 
+def test_endpoint_label_values_escape_the_byte_order_mark():
+    config = _scrape_target_config({"juju_application": "polkadot", "region": "eu\ufeffnorth"})
+    assert 'region = "eu\\ufeffnorth",' in config
+    assert "\ufeff" not in config
+
+
 def test_endpoint_label_keys_true_false_null_render_quoted():
     config = _scrape_target_config({"true": "a", "false": "b", "null": "c", "region": "d"})
     assert '"true" = "a",' in config
