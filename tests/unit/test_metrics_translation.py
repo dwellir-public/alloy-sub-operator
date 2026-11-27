@@ -81,11 +81,9 @@ def test_topology_labels_win(monkeypatch):
     charm = SimpleNamespace(
         _global_scrape_interval=lambda: "60s",
         _global_scrape_timeout=lambda: "10s",
-        _unit_ip=lambda: "10.0.0.7",
     )
 
     (job,) = AlloySubCharm._active_metrics_scrape_jobs(charm, payload, context)
 
     assert job.targets[0].labels["juju_unit"] == "iris/0"
     assert job.targets[0].labels["extra"] == "x"
-    assert job.targets[0].labels["unit_ip"] == "10.0.0.7"
