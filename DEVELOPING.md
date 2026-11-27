@@ -77,3 +77,21 @@ BOMs as artifacts rather than source files.
 Rule compression uses Canonical's public `cosl` API. Rule acceptance, retention
 and size policy belong to this charm; no shared Dwellir transport package or
 cross-repository source synchronization is required.
+
+## Diagnostic action integration test
+
+Build the charm for the base being tested, then run from this repository:
+
+```bash
+charmcraft pack --platform=ubuntu@24.04:amd64
+ALLOY_DIAGNOSTICS_CHARM_PATH="$PWD/alloy-sub_ubuntu@24.04-amd64.charm" \
+  ALLOY_DIAGNOSTICS_BASE=ubuntu@24.04 \
+  uv run --group dev pytest -q tests/integration/test_diagnostics.py
+```
+
+The test explicitly uses controller `local`, creates its own disposable model,
+and destroys it on exit. It deploys the built artifact (and an Ubuntu principal
+for alloy-sub), then checks real service/config/journal diagnostics and that
+repeating the action preserves process identity, config digest and ownership.
+It does not use SSH or `juju exec`, and does not prove remote telemetry delivery.
+Without the artifact variable it skips before creating a model.

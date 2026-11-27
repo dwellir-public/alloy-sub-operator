@@ -77,3 +77,12 @@ injected from that original payload topology.
 - partitioning in the shared observability deployment is done through metric
   labels such as `juju_model`, `juju_model_uuid`, `juju_application`, and
   `juju_unit`, not by publishing tenant metadata on the relation
+
+## Read-only diagnostics
+
+`get-diagnostics` is wired in `src/charm.py`; `src/diagnostics.py` owns the
+fixed service/config/journal probes. It uses `alloy.verify_config` for syntax
+validation and reads the existing ownership marker without claiming it. It
+does not call reconciliation or change workload/unit state. Probe failures
+remain explicit in the results; local diagnostics do not establish remote
+telemetry delivery. See the README for the result contract and bounds.
