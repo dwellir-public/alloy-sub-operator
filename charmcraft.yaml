@@ -120,6 +120,25 @@ config:
       default: 5
 
 actions:
+  get-diagnostics:
+    description: |
+      Read-only Alloy service/process state, configuration syntax check and SHA256,
+      and recent Alloy journal entries, including warnings/errors. Does not restart,
+      reconfigure or adopt Alloy. Probe failures are reported as unavailable, not healthy.
+    params:
+      lookback-minutes:
+        type: integer
+        default: 10
+        minimum: 1
+        maximum: 60
+        description: Journal lookback window in minutes (1-60).
+      log-lines:
+        type: integer
+        default: 50
+        minimum: 0
+        maximum: 100
+        description: Maximum recent journal entries (0-100); 0 disables log collection.
+    additionalProperties: false
   adopt-alloy:
     description: |
       Take ownership of an Alloy that is already installed on this machine from

@@ -35,7 +35,7 @@ try:
     )
     from charms.pyroscope_coordinator_k8s.v0.profiling import ProfilingEndpointRequirer
 
-    from . import alloy, alloy_ownership
+    from . import alloy, alloy_ownership, diagnostics
     from .alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
     from .config_builder import (
         DEFAULT_CONFIG_PATH,
@@ -80,6 +80,7 @@ except ImportError:
 
     import alloy
     import alloy_ownership
+    import diagnostics
     from alert_rules import CosToolRuleValidator, build_rule_state, publish_rule_groups, validate_rule_groups
     from config_builder import (
         DEFAULT_CONFIG_PATH,
@@ -285,6 +286,7 @@ class AlloySubCharm(ops.CharmBase):
         self.pprof_sources = PprofScrapeRequirer(self, relation_name="profiling-source")
         self._rule_validator = CosToolRuleValidator()
 
+        self.framework.observe(self.on.get_diagnostics_action, self._on_get_diagnostics_action)
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.adopt_alloy_action, self._on_adopt_alloy_action)
         self.framework.observe(self.on.start, self._on_start)
@@ -409,6 +411,26 @@ class AlloySubCharm(ops.CharmBase):
         alloy.write_custom_args(self._desired_custom_args())
         self._stored.install_pending = False
         self._stored.alloy_installed = True
+
+    def _on_get_diagnostics_action(self, event: ops.ActionEvent) -> None:
+        """Report machine diagnostics without invoking lifecycle reconciliation."""
+        try:
+            results = diagnostics.collect(
+                lookback_minutes=event.params.get("lookback-minutes", 10),
+                log_lines=event.params.get("log-lines", 50),
+            )
+        except ValueError as exc:
+            event.fail(str(exc))
+            return
+        results["unit-status"] = self.unit.status.name
+        try:
+            owner = alloy_ownership.current_owner()
+            results["owner"] = owner or "unclaimed"
+            results["owned-by-unit"] = owner == self.unit.name
+        except OSError:
+            results["owner"] = "unknown"
+            results["owned-by-unit"] = False
+        event.set_results(results)
 
     def _on_adopt_alloy_action(self, event: ops.ActionEvent) -> None:
         """Hand an unmanaged, deb-package Alloy to this unit.

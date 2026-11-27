@@ -498,3 +498,45 @@ Upgrade Loki/Mimir receivers and gateways before collectors when aggregates exce
 the JSON size limit. Encoded values remain below 60 KiB, with the collector's
 existing stricter publication guard retained. Compression does not change source
 topology, machine-observability schema/artifact encoding, or artifact-count limits.
+
+## Read-only refresh diagnostics
+
+Run this action on **every unit** before and after a refresh:
+
+```bash
+juju run -m <controller>:<owner>/<model> alloy-sub/0 get-diagnostics
+juju run -m <controller>:<owner>/<model> alloy-sub/0 get-diagnostics lookback-minutes=5 log-lines=100
+```
+
+`get-diagnostics` needs action access, not SSH or `juju exec`. It reads
+`alloy.service`, checks the syntax of `/etc/alloy/config.alloy` with the existing
+`alloy fmt` check (without `--write`), and reads that service's local journal.
+It never starts, restarts, reloads, reconfigures or adopts Alloy and does not
+change unit status. It can diagnose an unowned or failed installation too;
+`owned-by-unit=false` means the running service cannot be attributed to this unit.
+
+Results include `observed-at`, `unit-status`, `owner`, `owned-by-unit`,
+`service-state`, `service-sub-state`, `main-pid`, `process-start-time`,
+`config-syntax`, `config-sha256`, `logs-since`, `logs-status`, `recent-logs`,
+and `logs-truncated`. Juju may serialize boolean results as strings such as
+`True`/`False`; normalize these when automating. A failed service probe reports `service-query=unavailable`;
+config checks report `invalid` or `unavailable` instead of passing. The syntax
+check does not prove component health or successful telemetry delivery.
+
+Logs include all journal priorities (Alloy also embeds severity in its message),
+default to the last 10 minutes / 50
+entries, and are capped at 16 KiB. Use `log-lines=0` to skip them. An empty log
+result means no matching retained entries were returned, not proof of health.
+Common credential forms and URLs are redacted; review messages before sharing
+because arbitrary application log content may still contain sensitive data.
+Configuration contents and parser error output are never returned. Each service
+or journal query times out after 10 seconds; syntax validation after 30 seconds.
+
+After a refresh, check the intended charm revision and `active/idle` in Juju,
+require `service-state=active`, `owned-by-unit=true` and `config-syntax=valid`,
+and review new warnings/errors. PIDs and checksums can change during a refresh.
+Confirm fresh telemetry in the destination; the action does not prove ingestion.
+
+Older charm revisions may not provide this action. Check `juju actions` first;
+for the first refresh to an action-capable revision, capture the available Juju
+and telemetry baseline and run the action after refresh.

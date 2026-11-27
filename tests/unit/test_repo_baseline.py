@@ -60,7 +60,7 @@ def test_pyproject_has_uv_style_dependency_groups():
     assert "[dependency-groups]" in pyproject
     assert 'lint = ["ruff", "codespell"]' in pyproject
     assert 'unit = ["pytest", "coverage[toml]", "ops[testing]"]' in pyproject
-    assert 'integration = ["pytest", "pytest-operator", "juju"]' in pyproject
+    assert 'integration = ["pytest", "pytest-operator", "juju", "jubilant"]' in pyproject
     assert '"pyright"' in pyproject
     assert '"tox"' in pyproject
 

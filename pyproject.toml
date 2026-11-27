@@ -14,7 +14,7 @@ dependencies = [
 [dependency-groups]
 lint = ["ruff", "codespell"]
 unit = ["pytest", "coverage[toml]", "ops[testing]"]
-integration = ["pytest", "pytest-operator", "juju"]
+integration = ["pytest", "pytest-operator", "juju", "jubilant"]
 dev = [
   {include-group = "lint"},
   {include-group = "unit"},
