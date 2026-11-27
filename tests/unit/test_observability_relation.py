@@ -1607,7 +1607,7 @@ def _scrape_config_for(monkeypatch, endpoints, unit_address=None):
     harness.begin()
     juju_info = harness.add_relation("juju-info", "iris")
     harness.add_relation_unit(juju_info, "iris/0")
-    # The principal's relayed address must never be the source of internal_ip.
+    # The principal's relayed address must never be the source of unit_ip.
     harness.update_relation_data(juju_info, "iris/0", {"private-address": "10.99.99.99"})
     machine = harness.add_relation("machine-observability", "iris")
     payload = _v3_payload()
@@ -1653,31 +1653,31 @@ def test_endpoint_label_values_are_escaped(monkeypatch):
 
 
 @pytest.mark.parametrize("address", ["10.0.0.7", "fd00::7"])
-def test_internal_ip_is_this_units_own_address(monkeypatch, address):
+def test_unit_ip_is_this_units_own_address(monkeypatch, address):
     config = _scrape_config_for(monkeypatch, [{"targets": ["localhost:9092"]}], unit_address=address)
 
     (block,) = _target_blocks(config)
-    assert f'internal_ip = "{address}"' in block
+    assert f'unit_ip = "{address}"' in block
     assert "10.99.99.99" not in config
 
 
-def test_workload_internal_ip_label_wins_over_the_collector(monkeypatch):
+def test_workload_unit_ip_label_wins_over_the_collector(monkeypatch):
     config = _scrape_config_for(
         monkeypatch,
-        [{"targets": ["localhost:9092"], "labels": {"internal_ip": "10.9.9.9"}}],
+        [{"targets": ["localhost:9092"], "labels": {"unit_ip": "10.9.9.9"}}],
         unit_address="10.0.0.7",
     )
 
     (block,) = _target_blocks(config)
-    assert 'internal_ip = "10.9.9.9"' in block
+    assert 'unit_ip = "10.9.9.9"' in block
     assert "10.0.0.7" not in config
 
 
-def test_internal_ip_is_left_out_when_juju_reports_no_address(monkeypatch):
+def test_unit_ip_is_left_out_when_juju_reports_no_address(monkeypatch):
     def no_binding(*_args, **_kwargs):
         raise ops.ModelError("no network for juju-info")
 
     monkeypatch.setattr(ops.Model, "get_binding", no_binding)
     config = _scrape_config_for(monkeypatch, [{"targets": ["localhost:9092"]}])
 
-    assert "internal_ip" not in config
+    assert "unit_ip" not in config
