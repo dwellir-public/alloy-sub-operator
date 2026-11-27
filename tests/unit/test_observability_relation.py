@@ -1657,20 +1657,8 @@ def test_unit_ip_is_this_units_own_address(monkeypatch, address):
     config = _scrape_config_for(monkeypatch, [{"targets": ["localhost:9092"]}], unit_address=address)
 
     (block,) = _target_blocks(config)
-    assert f'unit_ip = "{address}"' in block
+    assert f'juju_unit_ip = "{address}"' in block
     assert "10.99.99.99" not in config
-
-
-def test_workload_unit_ip_label_wins_over_the_collector(monkeypatch):
-    config = _scrape_config_for(
-        monkeypatch,
-        [{"targets": ["localhost:9092"], "labels": {"unit_ip": "10.9.9.9"}}],
-        unit_address="10.0.0.7",
-    )
-
-    (block,) = _target_blocks(config)
-    assert 'unit_ip = "10.9.9.9"' in block
-    assert "10.0.0.7" not in config
 
 
 def test_unit_ip_is_left_out_when_juju_reports_no_address(monkeypatch):
@@ -1680,4 +1668,4 @@ def test_unit_ip_is_left_out_when_juju_reports_no_address(monkeypatch):
     monkeypatch.setattr(ops.Model, "get_binding", no_binding)
     config = _scrape_config_for(monkeypatch, [{"targets": ["localhost:9092"]}])
 
-    assert "unit_ip" not in config
+    assert "juju_unit_ip" not in config
