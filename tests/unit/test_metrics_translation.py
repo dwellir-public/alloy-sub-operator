@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from types import SimpleNamespace
 
+import pytest
 from charms.dwellir_observability.v0.machine_observability import MetricsEndpoint
 
 from charm import merge_file_excludes, translate_metrics_endpoint
@@ -75,7 +76,9 @@ def test_topology_labels_win(monkeypatch):
     from charm import AlloySubCharm
     from principal_context import PrincipalContext
 
-    endpoint = MetricsEndpoint.model_construct(targets=["localhost:1"], labels={"juju_unit": "evil/9", "extra": "x"})
+    endpoint = MetricsEndpoint.model_construct(
+        targets=["localhost:1"], labels={"juju_unit": "evil/9", "juju_unit_ip": "10.9.9.9", "extra": "x"}
+    )
     payload = SimpleNamespace(charm_name=None, metrics_endpoints=[endpoint])
     context = PrincipalContext(application="iris", unit="iris/0", address="", model="m", model_uuid="u")
     charm = SimpleNamespace(
@@ -88,4 +91,9 @@ def test_topology_labels_win(monkeypatch):
 
     assert job.targets[0].labels["juju_unit"] == "iris/0"
     assert job.targets[0].labels["extra"] == "x"
-    assert job.targets[0].labels["unit_ip"] == "10.0.0.7"
+    assert job.targets[0].labels["juju_unit_ip"] == "10.0.0.7"
+
+
+def test_a_workload_cannot_send_the_unit_ip_label():
+    with pytest.raises(ValueError, match="reserved"):
+        MetricsEndpoint(targets=["localhost:1"], labels={"juju_unit_ip": "10.9.9.9"})
