@@ -28,6 +28,8 @@ Each `metrics_endpoints[].labels` entry (optional static `name: value` pairs) is
 applied to the series scraped from that endpoint's targets. Juju topology labels
 take precedence over an endpoint label of the same name.
 
+Each target also gets `internal_ip`, this unit's address.
+
 In subordinate mode, `alloy-sub` still treats `juju-info` as the source of
 truth for telemetry topology and may accept a v1 payload without
 `source_topology`. Separately, a non-empty v3 rule set requires valid

@@ -78,9 +78,14 @@ def test_topology_labels_win(monkeypatch):
     endpoint = MetricsEndpoint.model_construct(targets=["localhost:1"], labels={"juju_unit": "evil/9", "extra": "x"})
     payload = SimpleNamespace(charm_name=None, metrics_endpoints=[endpoint])
     context = PrincipalContext(application="iris", unit="iris/0", address="", model="m", model_uuid="u")
-    charm = SimpleNamespace(_global_scrape_interval=lambda: "60s", _global_scrape_timeout=lambda: "10s")
+    charm = SimpleNamespace(
+        _global_scrape_interval=lambda: "60s",
+        _global_scrape_timeout=lambda: "10s",
+        _internal_ip=lambda: "10.0.0.7",
+    )
 
     (job,) = AlloySubCharm._active_metrics_scrape_jobs(charm, payload, context)
 
     assert job.targets[0].labels["juju_unit"] == "iris/0"
     assert job.targets[0].labels["extra"] == "x"
+    assert job.targets[0].labels["internal_ip"] == "10.0.0.7"
