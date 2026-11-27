@@ -145,7 +145,7 @@ def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPaylo
 
 logger = logging.getLogger(__name__)
 _LABEL_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-INTERNAL_IP_LABEL = "internal_ip"
+UNIT_IP_LABEL = "unit_ip"
 
 RULE_CACHE_KEY = "_alloy_sub_rule_state_v1"
 RULE_CACHE_VALUE_LIMIT = 60 * 1024
@@ -1365,7 +1365,7 @@ class AlloySubCharm(ops.CharmBase):
         ]
         return dedupe_endpoints([*relation_endpoints, *self._grafana_cloud_metrics_endpoints()])
 
-    def _internal_ip(self) -> str:
+    def _unit_ip(self) -> str:
         """Return this unit's own address on the juju-info binding, or "" when Juju reports none."""
         try:
             network = self.model.get_binding("juju-info").network
@@ -1380,8 +1380,8 @@ class AlloySubCharm(ops.CharmBase):
         """Translate active metrics endpoints from the machine-observability payload."""
         topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
         # A payload is application data, so only the collector can say which machine a target is on.
-        internal_ip = self._internal_ip()
-        collector_labels = {INTERNAL_IP_LABEL: internal_ip} if internal_ip else {}
+        unit_ip = self._unit_ip()
+        collector_labels = {UNIT_IP_LABEL: unit_ip} if unit_ip else {}
         translated_jobs = [
             translate_metrics_endpoint(
                 endpoint,
