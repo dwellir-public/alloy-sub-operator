@@ -145,7 +145,6 @@ def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPaylo
 
 logger = logging.getLogger(__name__)
 _LABEL_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-UNIT_IP_LABEL = "juju_unit_ip"
 
 RULE_CACHE_KEY = "_alloy_sub_rule_state_v1"
 RULE_CACHE_VALUE_LIMIT = 60 * 1024
@@ -1284,6 +1283,7 @@ class AlloySubCharm(ops.CharmBase):
                 relation,
                 model_name=self.model.name,
                 model_uuid=self.model.uuid,
+                address=self._unit_ip(),
             )
         payload = payload if payload is not None else self._observability_payload()
         topology = payload.source_topology
@@ -1292,6 +1292,7 @@ class AlloySubCharm(ops.CharmBase):
                 topology,
                 model_name=self.model.name,
                 model_uuid=self.model.uuid,
+                address=self._unit_ip(),
             )
         return None
 
@@ -1379,9 +1380,6 @@ class AlloySubCharm(ops.CharmBase):
     ) -> list[BuilderMetricsScrapeJob]:
         """Translate active metrics endpoints from the machine-observability payload."""
         topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
-        # A payload is application data, so only the collector can say which machine a target is on.
-        unit_ip = self._unit_ip()
-        collector_labels = {**({UNIT_IP_LABEL: unit_ip} if unit_ip else {}), **topology_labels}
         translated_jobs = [
             translate_metrics_endpoint(
                 endpoint,
@@ -1398,7 +1396,7 @@ class AlloySubCharm(ops.CharmBase):
                 targets=[
                     ScrapeTarget(
                         address=target.address,
-                        labels={**target.labels, **collector_labels},
+                        labels={**target.labels, **topology_labels},
                     )
                     for target in job.targets
                 ],

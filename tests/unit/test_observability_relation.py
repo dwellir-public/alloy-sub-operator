@@ -64,11 +64,13 @@ def test_principal_context_prefers_attached_principal_unit():
         remote_unit_data={"private-address": "10.0.0.5"},
     )
 
-    context = PrincipalContext.from_relation(relation)
+    context = PrincipalContext.from_relation(relation, address="10.0.0.7")
 
     assert context.application == "polkadot"
     assert context.unit == "polkadot/0"
-    assert context.address == "10.0.0.5"
+    # The address is the collector's own; the principal's relayed one is not read.
+    assert context.address == "10.0.0.7"
+    assert PrincipalContext.from_relation(relation).address == ""
 
 
 def test_machine_observability_payload_parses_generic_sources():
@@ -315,7 +317,14 @@ def test_principal_context_omits_juju_charm_when_not_known():
         "juju_model_uuid": "uuid-1",
         "juju_application": "polkadot",
         "juju_unit": "polkadot/0",
+        "juju_unit_ip": "10.0.0.5",
     }
+
+
+def test_principal_context_omits_juju_unit_ip_without_an_address():
+    context = PrincipalContext(application="polkadot", unit="polkadot/0", model="test-model", model_uuid="uuid-1")
+
+    assert "juju_unit_ip" not in context.juju_labels()
 
 
 def test_principal_context_can_render_explicit_juju_charm_label():

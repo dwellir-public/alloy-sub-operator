@@ -1524,3 +1524,45 @@ def test_no_machine_observability_and_no_host_metrics_still_waits():
     assert state_out.unit_status == testing.WaitingStatus(
         "Alloy service down; config waiting for machine-observability relation"
     )
+
+
+def test_juju_unit_ip_labels_host_metrics_workload_metrics_and_logs():
+    relations = [
+        testing.SubordinateRelation(
+            "juju-info",
+            remote_app_name="polkadot",
+            remote_unit_id=0,
+            # The principal's relayed address must never become the label.
+            remote_unit_data={"private-address": "10.99.99.99"},
+        ),
+        testing.Relation(
+            "send-remote-write",
+            remote_app_name="mimir",
+            remote_app_data={"remote_write": json.dumps({"url": REMOTE_WRITE_URL})},
+        ),
+        testing.Relation("send-loki-logs", remote_app_name="loki", remote_app_data={"url": LOKI_URL}),
+        testing.SubordinateRelation(
+            "machine-observability",
+            remote_app_name="polkadot",
+            remote_unit_id=0,
+            remote_app_data={
+                "payload": _machine_observability_payload(
+                    systemd_units=["polkadot.service"],
+                    metrics_endpoints=[{"targets": ["localhost:9615"]}],
+                )
+            },
+        ),
+    ]
+    state = testing.State(relations=relations, config={"enable-host-metrics": True})
+
+    with patch.object(AlloySubCharm, "_unit_ip", lambda _self: "10.0.0.7"):
+        _, config = _run_and_capture_config(state)
+
+    host_metrics = config.split('discovery.relabel "node" {')[1].split('prometheus.scrape "node"')[0]
+    workload = config.split('prometheus.scrape "polkadot" {')[1].split("loki.process")[0]
+    logs = config.split('loki.process "juju" {')[1]
+    assert 'target_label = "juju_unit_ip"' in host_metrics
+    assert 'replacement  = "10.0.0.7"' in host_metrics
+    assert 'juju_unit_ip = "10.0.0.7",' in workload
+    assert 'juju_unit_ip = "10.0.0.7",' in logs
+    assert "10.99.99.99" not in config

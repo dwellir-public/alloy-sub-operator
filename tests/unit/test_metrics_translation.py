@@ -80,12 +80,8 @@ def test_topology_labels_win(monkeypatch):
         targets=["localhost:1"], labels={"juju_unit": "evil/9", "juju_unit_ip": "10.9.9.9", "extra": "x"}
     )
     payload = SimpleNamespace(charm_name=None, metrics_endpoints=[endpoint])
-    context = PrincipalContext(application="iris", unit="iris/0", address="", model="m", model_uuid="u")
-    charm = SimpleNamespace(
-        _global_scrape_interval=lambda: "60s",
-        _global_scrape_timeout=lambda: "10s",
-        _unit_ip=lambda: "10.0.0.7",
-    )
+    context = PrincipalContext(application="iris", unit="iris/0", address="10.0.0.7", model="m", model_uuid="u")
+    charm = SimpleNamespace(_global_scrape_interval=lambda: "60s", _global_scrape_timeout=lambda: "10s")
 
     (job,) = AlloySubCharm._active_metrics_scrape_jobs(charm, payload, context)
 
