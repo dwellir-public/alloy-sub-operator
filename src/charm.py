@@ -145,6 +145,7 @@ def _load_telemetry_payload(relation: ops.Relation) -> MachineObservabilityPaylo
 
 logger = logging.getLogger(__name__)
 _LABEL_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+INTERNAL_IP_LABEL = "internal_ip"
 
 RULE_CACHE_KEY = "_alloy_sub_rule_state_v1"
 RULE_CACHE_VALUE_LIMIT = 60 * 1024
@@ -191,7 +192,7 @@ def translate_metrics_endpoint(
 ) -> BuilderMetricsScrapeJob:
     """Translate one relation metrics endpoint into a config-builder scrape job."""
     job_name = principal_application if source_index == 0 else f"{principal_application}-{source_index}"
-    targets = [ScrapeTarget(address=target) for target in endpoint.targets]
+    targets = [ScrapeTarget(address=target, labels=dict(endpoint.labels)) for target in endpoint.targets]
     return BuilderMetricsScrapeJob(
         job_name=job_name,
         targets=targets,
@@ -1364,11 +1365,23 @@ class AlloySubCharm(ops.CharmBase):
         ]
         return dedupe_endpoints([*relation_endpoints, *self._grafana_cloud_metrics_endpoints()])
 
+    def _internal_ip(self) -> str:
+        """Return this unit's own address on the juju-info binding, or "" when Juju reports none."""
+        try:
+            network = self.model.get_binding("juju-info").network
+        except (ops.ModelError, KeyError, AttributeError):
+            return ""
+        address = network.bind_address or next(iter(network.ingress_addresses), None)
+        return str(address) if address else ""
+
     def _active_metrics_scrape_jobs(
         self, payload: MachineObservabilityPayload, principal_context: PrincipalContext
     ) -> list[BuilderMetricsScrapeJob]:
         """Translate active metrics endpoints from the machine-observability payload."""
         topology_labels = principal_context.juju_labels(charm_name=payload.charm_name)
+        # A payload is application data, so only the collector can say which machine a target is on.
+        internal_ip = self._internal_ip()
+        collector_labels = {INTERNAL_IP_LABEL: internal_ip} if internal_ip else {}
         translated_jobs = [
             translate_metrics_endpoint(
                 endpoint,
@@ -1382,7 +1395,13 @@ class AlloySubCharm(ops.CharmBase):
         return [
             BuilderMetricsScrapeJob(
                 job_name=job.job_name,
-                targets=[ScrapeTarget(address=target.address, labels=topology_labels) for target in job.targets],
+                targets=[
+                    ScrapeTarget(
+                        address=target.address,
+                        labels={**collector_labels, **target.labels, **topology_labels},
+                    )
+                    for target in job.targets
+                ],
                 metrics_path=job.metrics_path,
                 scheme=job.scheme,
                 scrape_interval=job.scrape_interval,

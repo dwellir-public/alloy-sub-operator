@@ -6,7 +6,7 @@ def test_machine_observability_library_matches_canonical_source():
     library = Path(__file__).resolve().parents[2] / "lib/charms/dwellir_observability/v0/machine_observability.py"
 
     assert hashlib.sha256(library.read_bytes()).hexdigest() == (
-        "f93196c38bbd8343b1d72173e860e1adf5ddf04ce728fae36d6e57fc3916e679"
+        "1ee5c616d6b863fc1b93c5515fdc4e1ca9c1d41251fdd6b28814d2706e668f7f"
     )
 
 
